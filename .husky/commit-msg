@@ -1,1 +1,1 @@
-npx --no -- commitlint --edit $1
+pnpm --dir frontend exec commitlint --edit $1

@@ -7,6 +7,22 @@
 
 **English** | [中文](./README.zh-CN.md)
 
+## Project structure
+
+```text
+vue-element-plus-admin/
+├── frontend/  # Vue 3 frontend
+└── backend/   # Backend source directory
+```
+
+Run frontend commands from the `frontend` directory:
+
+```bash
+cd frontend
+pnpm install
+pnpm dev
+```
+
 ## Introduction
 
 vue-element-plus-admin is a free and open source middle and background template based on `element-plus`. Developed using the latest mainstream technologies such as `vue3`, `vite` and `typescript`, the out of the box middle and background front-end solution can be used as the starting template of the project and learning reference. And always pay attention to the latest technological trends and update them as soon as possible.

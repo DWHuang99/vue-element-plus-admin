@@ -7,6 +7,22 @@
 
 [English](./README.md) | **中文**
 
+## 项目结构
+
+```text
+vue-element-plus-admin/
+├── frontend/  # Vue 3 前端
+└── backend/   # 后端源码目录
+```
+
+前端命令需要在 `frontend` 目录执行：
+
+```bash
+cd frontend
+pnpm install
+pnpm dev
+```
+
 ## 介绍
 
 vue-element-plus-admin 是一个基于 `element-plus` 免费开源的中后台模版。使用了最新的`vue3`，`vite`，`TypeScript`等主流技术开发，开箱即用的中后台前端解决方案，可以用来作为项目的启动模版，也可用于学习参考。并且时刻关注着最新技术动向，尽可能的第一时间更新。

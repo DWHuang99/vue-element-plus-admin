@@ -1,2 +1,2 @@
-npm run ts:check
-npm run lint:lint-staged
+pnpm --dir frontend run ts:check
+pnpm --dir frontend run lint:lint-staged
