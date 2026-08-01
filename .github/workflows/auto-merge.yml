@@ -14,7 +14,7 @@ on:
   pull_request_review:
     types:
       - submitted
-  status: {}
+  status:
 
 jobs:
   # 合并发布版本的 pr 到 master
