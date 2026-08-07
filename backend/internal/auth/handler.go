@@ -12,7 +12,7 @@ import (
 
 // Validation rules per research.md decision 9.
 var (
-	usernameRe = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
+	usernameRe     = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
 	minUsernameLen = 3
 	maxUsernameLen = 32
 	minPasswordLen = 8
@@ -116,7 +116,9 @@ func (h *Handler) Logout(c *gin.Context) {
 	}
 
 	h.logger.Info("user logged out", "request_id", c.GetString("X-Request-Id"))
-	c.Status(http.StatusNoContent)
+	// Return a JSON body (not 204): the frontend response interceptor treats an
+	// empty-body 2xx as a failure and would surface a spurious error toast.
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{}})
 }
 
 // Me handles GET /api/v1/auth/me.
@@ -128,12 +130,14 @@ func (h *Handler) Me(c *gin.Context) {
 	}
 	user := principal.(*AuthUser)
 
-	c.JSON(http.StatusOK, gin.H{"data": gin.H{
-		"user": gin.H{
-			"id":         user.ID,
-			"username":   user.Username,
-		},
-	}})
+	profile, err := h.svc.GetUserProfile(c.Request.Context(), user.ID)
+	if err != nil {
+		h.logger.Error("get profile failed", "request_id", c.GetString("X-Request-Id"), "error", err.Error())
+		c.JSON(http.StatusInternalServerError, newErrorEnvelope("INTERNAL_ERROR", "内部错误", nil))
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"user": profile}})
 }
 
 // validateCredentials checks username/password format rules.

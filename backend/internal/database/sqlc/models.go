@@ -8,6 +8,22 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type Department struct {
+	ID        int64              `json:"id"`
+	Name      string             `json:"name"`
+	ParentID  pgtype.Int8        `json:"parent_id"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+type Role struct {
+	ID        int64              `json:"id"`
+	Name      string             `json:"name"`
+	Code      string             `json:"code"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Session struct {
 	ID         int64              `json:"id"`
 	TokenHash  string             `json:"token_hash"`
@@ -24,4 +40,12 @@ type User struct {
 	PasswordHash string             `json:"password_hash"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	Account      pgtype.Text        `json:"account"`
+	Email        pgtype.Text        `json:"email"`
+	DepartmentID pgtype.Int8        `json:"department_id"`
+}
+
+type UserRole struct {
+	UserID int64 `json:"user_id"`
+	RoleID int64 `json:"role_id"`
 }

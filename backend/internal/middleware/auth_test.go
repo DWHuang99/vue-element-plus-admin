@@ -37,6 +37,9 @@ func (m *mockAuthSvc) Authenticate(ctx context.Context, tokenHash string) (*auth
 	}
 	return m.principal, nil
 }
+func (m *mockAuthSvc) GetUserProfile(ctx context.Context, userID int64) (*auth.UserProfile, error) {
+	return nil, auth.ErrInvalidToken
+}
 
 func newAuthRouter(svc auth.Service, handler func(c *gin.Context)) *gin.Engine {
 	router := gin.New()

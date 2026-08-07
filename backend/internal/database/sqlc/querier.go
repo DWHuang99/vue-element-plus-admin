@@ -6,21 +6,57 @@ package sqlc
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Querier interface {
+	CountDepartmentsByParentID(ctx context.Context, parentID pgtype.Int8) (int64, error)
+	CountUserRolesByRoleID(ctx context.Context, roleID int64) (int64, error)
+	CountUsersByDepartment(ctx context.Context, arg CountUsersByDepartmentParams) (int64, error)
+	CountUsersByDepartmentID(ctx context.Context, departmentID pgtype.Int8) (int64, error)
+	CreateDepartment(ctx context.Context, arg CreateDepartmentParams) (Department, error)
+	// users_rbac.sql
+	// User-management queries: create/update/delete users, paginated listing,
+	// and the user<->role join. Query names avoid colliding with the existing
+	// auth-focused CreateUser / GetUserByUsername / GetUserByID.
+	CreateRbacUser(ctx context.Context, arg CreateRbacUserParams) (CreateRbacUserRow, error)
+	CreateRole(ctx context.Context, arg CreateRoleParams) (Role, error)
 	CreateSession(ctx context.Context, arg CreateSessionParams) (Session, error)
-	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
+	CreateUser(ctx context.Context, arg CreateUserParams) (CreateUserRow, error)
+	DeleteDepartment(ctx context.Context, id int64) error
+	DeleteRole(ctx context.Context, id int64) error
+	DeleteUser(ctx context.Context, id int64) error
+	DeleteUserRolesByUserID(ctx context.Context, userID int64) error
+	GetDepartmentByID(ctx context.Context, id int64) (Department, error)
+	GetDepartmentByName(ctx context.Context, name string) (Department, error)
+	GetRoleByCode(ctx context.Context, code string) (Role, error)
+	GetRoleByID(ctx context.Context, id int64) (Role, error)
+	GetRoleByName(ctx context.Context, name string) (Role, error)
 	GetSessionByTokenHash(ctx context.Context, tokenHash string) (GetSessionByTokenHashRow, error)
-	GetUserByID(ctx context.Context, id int64) (User, error)
-	GetUserByUsername(ctx context.Context, username string) (User, error)
+	GetUserByID(ctx context.Context, id int64) (GetUserByIDRow, error)
+	GetUserByUsername(ctx context.Context, username string) (GetUserByUsernameRow, error)
+	GetUserFullByID(ctx context.Context, id int64) (GetUserFullByIDRow, error)
 	// Health check query for sqlc.
 	// Used to verify database connectivity during readiness checks.
 	// Currently unused by scaffold (health check uses pgx Ping directly),
 	// but serves as a sqlc query placeholder for future database-dependent checks.
 	HealthCheck(ctx context.Context) (int32, error)
+	InsertUserRole(ctx context.Context, arg InsertUserRoleParams) error
+	// departments.sql
+	// Queries for the departments table (self-referencing tree).
+	ListDepartments(ctx context.Context) ([]Department, error)
+	// roles.sql
+	// Queries for the roles table. `code` is reserved for phase-2 permission filtering.
+	ListRoles(ctx context.Context) ([]Role, error)
+	ListRolesByUserID(ctx context.Context, userID int64) ([]ListRolesByUserIDRow, error)
+	ListUsersByDepartment(ctx context.Context, arg ListUsersByDepartmentParams) ([]ListUsersByDepartmentRow, error)
 	RevokeSessionByTokenHash(ctx context.Context, tokenHash string) error
 	TouchSession(ctx context.Context, arg TouchSessionParams) error
+	UpdateDepartment(ctx context.Context, arg UpdateDepartmentParams) (Department, error)
+	UpdateRbacUser(ctx context.Context, arg UpdateRbacUserParams) (UpdateRbacUserRow, error)
+	UpdateRole(ctx context.Context, arg UpdateRoleParams) (Role, error)
+	UpdateUserPassword(ctx context.Context, arg UpdateUserPasswordParams) error
 }
 
 var _ Querier = (*Queries)(nil)

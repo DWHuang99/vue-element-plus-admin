@@ -23,10 +23,11 @@ func init() {
 
 // mockService is a test double for the Service interface.
 type mockService struct {
-	registerFn     func(ctx context.Context, username, password string) (*AuthResult, error)
-	loginFn        func(ctx context.Context, username, password string) (*AuthResult, error)
-	logoutFn       func(ctx context.Context, tokenHash string) error
-	authenticateFn func(ctx context.Context, tokenHash string) (*AuthUser, error)
+	registerFn       func(ctx context.Context, username, password string) (*AuthResult, error)
+	loginFn          func(ctx context.Context, username, password string) (*AuthResult, error)
+	logoutFn         func(ctx context.Context, tokenHash string) error
+	authenticateFn   func(ctx context.Context, tokenHash string) (*AuthUser, error)
+	getUserProfileFn func(ctx context.Context, userID int64) (*UserProfile, error)
 }
 
 func (m *mockService) Register(ctx context.Context, username, password string) (*AuthResult, error) {
@@ -53,6 +54,13 @@ func (m *mockService) Logout(ctx context.Context, tokenHash string) error {
 func (m *mockService) Authenticate(ctx context.Context, tokenHash string) (*AuthUser, error) {
 	if m.authenticateFn != nil {
 		return m.authenticateFn(ctx, tokenHash)
+	}
+	return nil, ErrInvalidToken
+}
+
+func (m *mockService) GetUserProfile(ctx context.Context, userID int64) (*UserProfile, error) {
+	if m.getUserProfileFn != nil {
+		return m.getUserProfileFn(ctx, userID)
 	}
 	return nil, ErrInvalidToken
 }
@@ -254,7 +262,7 @@ func TestHandler_LoginInvalidInput(t *testing.T) {
 	require.Len(t, env.Error.FieldErrors, 2)
 }
 
-// T029: Logout + me contract tests.
+// T025: Logout contract tests.
 func TestHandler_Logout(t *testing.T) {
 	loggedOut := false
 	h := newTestHandler(&mockService{
@@ -274,12 +282,15 @@ func TestHandler_Logout(t *testing.T) {
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusNoContent, w.Code)
+	// 200 with a JSON body, never 204: the frontend response interceptor treats
+	// an empty-body 2xx as a failure and would surface a spurious error toast.
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), `"data":{}`)
 	assert.True(t, loggedOut, "service.Logout must be called")
 }
 
 func TestHandler_LogoutIdempotent(t *testing.T) {
-	// Contract: revoking an already-invalid/revoked token is idempotent (204).
+	// Contract: revoking an already-invalid/revoked token is idempotent (200).
 	h := newTestHandler(&mockService{
 		logoutFn: func(_ context.Context, _ string) error {
 			return nil // service returns nil even when token is unknown/revoked
@@ -297,7 +308,7 @@ func TestHandler_LogoutIdempotent(t *testing.T) {
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusNoContent, w.Code, "logout must be idempotent for invalid-but-wellformed tokens")
+	assert.Equal(t, http.StatusOK, w.Code, "logout must be idempotent for invalid-but-wellformed tokens")
 }
 
 func authHashOf(token string) string {
@@ -313,7 +324,11 @@ func TestHandler_LogoutMissingHashReturns401(t *testing.T) {
 }
 
 func TestHandler_Me(t *testing.T) {
-	h := newTestHandler(&mockService{})
+	h := newTestHandler(&mockService{
+		getUserProfileFn: func(_ context.Context, userID int64) (*UserProfile, error) {
+			return &UserProfile{ID: userID, Username: "alice"}, nil
+		},
+	})
 
 	router := gin.New()
 	router.GET("/me", func(c *gin.Context) {
@@ -337,6 +352,64 @@ func TestHandler_Me(t *testing.T) {
 	require.NoError(t, json.Unmarshal(body["data"], &data))
 	assert.Equal(t, int64(7), data.User.ID)
 	assert.Equal(t, "alice", data.User.Username)
+}
+
+// TestHandler_MeReturnsRolesAndDepartment: the US3 /auth/me extension must
+// surface department + roles so the frontend can gate menus on them.
+func TestHandler_MeReturnsRolesAndDepartment(t *testing.T) {
+	h := newTestHandler(&mockService{
+		getUserProfileFn: func(_ context.Context, userID int64) (*UserProfile, error) {
+			return &UserProfile{
+				ID:         userID,
+				Username:   "alice",
+				Account:    "alice",
+				Email:      "alice@example.com",
+				CreatedAt:  time.Date(2026, 8, 5, 10, 0, 0, 0, time.UTC),
+				Department: &DepartmentProfile{ID: 2, Name: "前端组"},
+				Roles: []RoleProfile{
+					{ID: 3, Name: "普通用户", Code: "user"},
+					{ID: 2, Name: "管理员", Code: "admin"},
+				},
+			}, nil
+		},
+	})
+
+	router := gin.New()
+	router.GET("/me", func(c *gin.Context) {
+		c.Set(ContextAuthUser, &AuthUser{ID: 7, Username: "alice"})
+		h.Me(c)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/me", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var body map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	var data struct {
+		User struct {
+			Account    string `json:"account"`
+			Email      string `json:"email"`
+			Department struct {
+				ID   int64  `json:"id"`
+				Name string `json:"name"`
+			} `json:"department"`
+			Roles []struct {
+				ID   int64  `json:"id"`
+				Name string `json:"name"`
+				Code string `json:"code"`
+			} `json:"roles"`
+		} `json:"user"`
+	}
+	require.NoError(t, json.Unmarshal(body["data"], &data))
+	assert.Equal(t, "alice", data.User.Account)
+	assert.Equal(t, "alice@example.com", data.User.Email)
+	assert.Equal(t, int64(2), data.User.Department.ID)
+	assert.Equal(t, "前端组", data.User.Department.Name)
+	require.Len(t, data.User.Roles, 2)
+	assert.Equal(t, "user", data.User.Roles[0].Code)
+	assert.Equal(t, "admin", data.User.Roles[1].Code)
 }
 
 func TestHandler_MeMissingPrincipalReturns401(t *testing.T) {

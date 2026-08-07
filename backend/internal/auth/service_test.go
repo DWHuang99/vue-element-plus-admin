@@ -137,6 +137,50 @@ func TestService_RegisterWhitespaceUsernameAllowedByService(t *testing.T) {
 	require.NotEmpty(t, res.Token)
 }
 
+// T023: Register assigns the default 'user' role in the same transaction.
+func TestService_RegisterAssignsDefaultRole(t *testing.T) {
+	username := uniqueUsername()
+	password := "supersecret123"
+	res, _ := mustRegister(t, username, password)
+
+	q := sqlc.New(testSvc.pool)
+	roles, err := q.ListRolesByUserID(testCtx, res.User.ID)
+	require.NoError(t, err)
+	require.Len(t, roles, 1, "a fresh user must have exactly the default role")
+	assert.Equal(t, "user", roles[0].Code)
+	assert.Equal(t, "普通用户", roles[0].Name)
+}
+
+// T024: /auth/me returns the extended profile (department + roles).
+func TestService_GetUserProfile(t *testing.T) {
+	username := uniqueUsername()
+	res, _ := mustRegister(t, username, "supersecret123")
+	userID := res.User.ID
+
+	profile, err := testSvc.GetUserProfile(testCtx, userID)
+	require.NoError(t, err)
+	assert.Equal(t, userID, profile.ID)
+	assert.Equal(t, username, profile.Username)
+	assert.Nil(t, profile.Department, "freshly registered user has no department")
+	require.Len(t, profile.Roles, 1)
+	assert.Equal(t, "user", profile.Roles[0].Code)
+
+	// Assign a department and verify it is surfaced. Resolve the seeded 研发部
+	// id dynamically via SQL to avoid coupling to seed row ids.
+	var deptID int64
+	require.NoError(t, testSvc.pool.QueryRow(testCtx,
+		`SELECT id FROM departments WHERE name = '研发部'`).Scan(&deptID))
+	require.NotZero(t, deptID)
+	_, err = testSvc.pool.Exec(testCtx,
+		`UPDATE users SET department_id = $1 WHERE id = $2`, deptID, userID)
+	require.NoError(t, err)
+
+	profile, err = testSvc.GetUserProfile(testCtx, userID)
+	require.NoError(t, err)
+	require.NotNil(t, profile.Department)
+	assert.Equal(t, "研发部", profile.Department.Name)
+}
+
 // T025: Login issues a session and fails uniformly for wrong password vs missing user.
 func TestService_LoginSuccess(t *testing.T) {
 	username := uniqueUsername()

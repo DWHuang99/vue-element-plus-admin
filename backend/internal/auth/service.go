@@ -35,12 +35,37 @@ type AuthUser struct {
 	Username string
 }
 
+// DepartmentProfile is the department reference in a user profile.
+type DepartmentProfile struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+}
+
+// RoleProfile is a role reference in a user profile.
+type RoleProfile struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+	Code string `json:"code"`
+}
+
+// UserProfile is the extended /auth/me payload: user + department + roles.
+type UserProfile struct {
+	ID         int64              `json:"id"`
+	Username   string             `json:"username"`
+	Account    string             `json:"account"`
+	Email      string             `json:"email"`
+	CreatedAt  time.Time          `json:"created_at"`
+	Department *DepartmentProfile `json:"department"`
+	Roles      []RoleProfile      `json:"roles"`
+}
+
 // Service is the auth business logic boundary (independent, testable service layer).
 type Service interface {
 	Register(ctx context.Context, username, password string) (*AuthResult, error)
 	Login(ctx context.Context, username, password string) (*AuthResult, error)
 	Logout(ctx context.Context, tokenHash string) error
 	Authenticate(ctx context.Context, tokenHash string) (*AuthUser, error)
+	GetUserProfile(ctx context.Context, userID int64) (*UserProfile, error)
 }
 
 // AuthService implements Service against PostgreSQL via sqlc.
@@ -114,6 +139,16 @@ func (s *AuthService) Register(ctx context.Context, username, password string) (
 		ExpiresAt: pgtype.Timestamptz{Time: SessionExpiry(now), Valid: true},
 	}); err != nil {
 		return nil, fmt.Errorf("create session: %w", err)
+	}
+
+	// Assign the default 'user' role so every account has at least one role
+	// (phase-2 permission filtering depends on it). Same transaction as the user.
+	defaultRole, err := qtx.GetRoleByCode(ctx, "user")
+	if err != nil {
+		return nil, fmt.Errorf("get default role: %w", err)
+	}
+	if err := qtx.InsertUserRole(ctx, sqlc.InsertUserRoleParams{UserID: user.ID, RoleID: defaultRole.ID}); err != nil {
+		return nil, fmt.Errorf("assign default role: %w", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -215,6 +250,52 @@ func (s *AuthService) Authenticate(ctx context.Context, tokenHash string) (*Auth
 	}
 
 	return &AuthUser{ID: row.UserID, Username: row.UserUsername}, nil
+}
+
+// GetUserProfile returns the extended /auth/me payload for a user id:
+// user fields plus department and roles (roles are always non-empty after
+// the register default-role assignment).
+func (s *AuthService) GetUserProfile(ctx context.Context, userID int64) (*UserProfile, error) {
+	u, err := s.q.GetUserFullByID(ctx, userID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrInvalidToken
+		}
+		return nil, fmt.Errorf("get user: %w", err)
+	}
+
+	profile := &UserProfile{
+		ID:        u.ID,
+		Username:  u.Username,
+		CreatedAt: u.CreatedAt.Time,
+	}
+	if u.Account.Valid {
+		profile.Account = u.Account.String
+	}
+	if u.Email.Valid {
+		profile.Email = u.Email.String
+	}
+
+	if u.DepartmentID.Valid {
+		dept, err := s.q.GetDepartmentByID(ctx, u.DepartmentID.Int64)
+		if err != nil {
+			if !errors.Is(err, pgx.ErrNoRows) {
+				return nil, fmt.Errorf("get department: %w", err)
+			}
+		} else {
+			profile.Department = &DepartmentProfile{ID: dept.ID, Name: dept.Name}
+		}
+	}
+
+	roles, err := s.q.ListRolesByUserID(ctx, u.ID)
+	if err != nil {
+		return nil, fmt.Errorf("list roles: %w", err)
+	}
+	profile.Roles = make([]RoleProfile, 0, len(roles))
+	for _, r := range roles {
+		profile.Roles = append(profile.Roles, RoleProfile{ID: r.ID, Name: r.Name, Code: r.Code})
+	}
+	return profile, nil
 }
 
 // isUniqueViolation reports whether err is a PostgreSQL unique-violation (23505).

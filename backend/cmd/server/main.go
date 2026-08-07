@@ -15,6 +15,7 @@ import (
 	"github.com/hdw/vue-element-plus-admin/backend/internal/logging"
 	"github.com/hdw/vue-element-plus-admin/backend/internal/middleware"
 	"github.com/hdw/vue-element-plus-admin/backend/internal/ratelimit"
+	"github.com/hdw/vue-element-plus-admin/backend/internal/rbac"
 	"github.com/hdw/vue-element-plus-admin/backend/internal/server"
 )
 
@@ -119,6 +120,24 @@ func main() {
 			authHandler.Login)
 		authGroup.POST("/logout", middleware.BearerToken(), authHandler.Logout)
 		authGroup.GET("/me", middleware.Auth(authSvc), authHandler.Me)
+	}
+
+	// 6c. RBAC routes under /api/v1 (departments/roles/users), auth-protected.
+	rbacSvc := rbac.NewRBACService(db.Pool)
+	rbacHandler := rbac.NewHandler(rbacSvc, logger)
+
+	rbacGroup := router.Group("/api/v1")
+	rbacGroup.Use(middleware.Auth(authSvc))
+	{
+		rbacGroup.GET("/roles", rbacHandler.ListRoles)
+		rbacGroup.POST("/roles", rbacHandler.SaveRole)
+		rbacGroup.POST("/roles/delete", rbacHandler.DeleteRoles)
+		rbacGroup.GET("/departments", rbacHandler.ListDepartments)
+		rbacGroup.POST("/departments", rbacHandler.SaveDepartment)
+		rbacGroup.POST("/departments/delete", rbacHandler.DeleteDepartments)
+		rbacGroup.GET("/users", rbacHandler.ListUsers)
+		rbacGroup.POST("/users", rbacHandler.SaveUser)
+		rbacGroup.POST("/users/delete", rbacHandler.DeleteUsers)
 	}
 
 	// 7. Start server (blocking call in goroutine)
