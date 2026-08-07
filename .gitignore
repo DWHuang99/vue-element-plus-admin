@@ -16,3 +16,6 @@ stats.html
 .agents/
 .claude/
 .specify/
+
+# Claude 交接文档（会话间传递，不入库）
+**/claude-handoff*.md
