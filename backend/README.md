@@ -69,9 +69,26 @@ curl http://localhost:8080/health/ready
 | POST | `/api/v1/auth/login` | 登录（返回会话令牌 + 用户信息） |
 | POST | `/api/v1/auth/logout` | 退出（撤销当前会话，幂等） |
 | GET | `/api/v1/auth/me` | 当前用户信息（需 Bearer 令牌） |
+| GET | `/api/v1/roles` | 角色列表（需 Bearer 令牌） |
+| POST | `/api/v1/roles` | 新建/编辑角色，`{id?, name, code}`（需 Bearer 令牌） |
+| POST | `/api/v1/roles/delete` | 批量删除角色，`{ids: number[]}`（需 Bearer 令牌） |
+| GET | `/api/v1/departments` | 部门树（需 Bearer 令牌） |
+| POST | `/api/v1/departments` | 新建/编辑部门，`{id?, name, parent_id?}`（需 Bearer 令牌） |
+| POST | `/api/v1/departments/delete` | 批量删除部门，`{ids: number[]}`（需 Bearer 令牌） |
+| GET | `/api/v1/users` | 用户分页列表，`?id&keyword&page_index&page_size`（需 Bearer 令牌） |
+| POST | `/api/v1/users` | 新建/编辑用户，`{id?, username, account, password?, email?, department_id?}`（需 Bearer 令牌） |
+| POST | `/api/v1/users/delete` | 批量删除用户，`{ids: number[]}`（需 Bearer 令牌） |
 
 健康检查契约见 [Health Check API 契约](../specs/001-backend-scaffold/contracts/health-api.md)；
-认证契约见 [Auth API 契约](../specs/002-user-auth/contracts/auth-api.md)。
+认证契约见 [Auth API 契约](../specs/002-user-auth/contracts/auth-api.md)；
+RBAC 管理接口契约见 [RBAC API 契约](../specs/003-rbac-permission-management/contracts/rbac-api.md)。
+
+### 管理接口约定
+
+- **鉴权**：除 `/api/v1/auth/*`（register/login/logout）外，所有 `/api/v1/*` 接口均需携带 `Authorization: Bearer <token>`。
+- **写接口（POST）统一返回 `200 {"data":{}}`**，不返回 204 空响应体——前端 axios 拦截器依赖非空 `data` 判定成功。
+- **错误统一封装**：`{"error":{"code","message","field_errors"}}`，字段校验失败时 `field_errors` 携带 `{field, code, message}` 列表。
+- **编辑与新建共用一个写接口**：请求体带 `id` 即更新，缺省 `id` 即创建（角色/部门/用户一致）。
 
 ## 项目结构
 
@@ -86,6 +103,7 @@ backend/
 │   │   ├── handler.go          # Gin HTTP 适配器
 │   │   └── errors.go           # 哨兵错误（契约错误码映射）
 │   ├── config/config.go         # 配置加载与校验
+│   ├── rbac/                    # RBAC 管理服务层（角色/部门/用户）
 │   ├── database/
 │   │   ├── db.go                # PostgreSQL 连接池
 │   │   ├── migrate.go           # 数据库迁移
