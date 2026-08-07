@@ -18,6 +18,17 @@ router.beforeEach(async (to, from, next) => {
   const permissionStore = usePermissionStoreWithOut()
   const appStore = useAppStoreWithOut()
   const userStore = useUserStoreWithOut()
+  // 有持久化令牌但尚未加载用户信息：用 /auth/me 验证令牌有效性。
+  if (!userStore.getUserInfo && userStore.getToken) {
+    try {
+      const ok = await userStore.fetchUserInfo()
+      if (!ok) {
+        userStore.reset()
+      }
+    } catch (e) {
+      userStore.reset()
+    }
+  }
   if (userStore.getUserInfo) {
     if (to.path === '/login') {
       next({ path: '/' })

@@ -6,6 +6,7 @@ const request = (option: AxiosConfig) => {
   const { url, method, params, data, headers, responseType } = option
 
   const userStore = useUserStoreWithOut()
+  const token = userStore.getToken
   return service.request({
     url: url,
     method,
@@ -14,7 +15,8 @@ const request = (option: AxiosConfig) => {
     responseType: responseType,
     headers: {
       'Content-Type': CONTENT_TYPE,
-      [userStore.getTokenKey ?? 'Authorization']: userStore.getToken ?? '',
+      // 后端要求 `Authorization: Bearer <token>`；无 token 时留空头（不影响 mock 接口）。
+      [userStore.getTokenKey ?? 'Authorization']: token ? `Bearer ${token}` : '',
       ...headers
     }
   })

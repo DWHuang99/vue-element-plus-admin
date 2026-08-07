@@ -3,33 +3,30 @@ import { Form, FormSchema } from '@/components/Form'
 import { reactive, ref, unref } from 'vue'
 import { useI18n } from '@/hooks/web/useI18n'
 import { useForm } from '@/hooks/web/useForm'
-import { ElInput, FormRules } from 'element-plus'
+import { FormRules } from 'element-plus'
 import { useValidator } from '@/hooks/web/useValidator'
 import { BaseButton } from '@/components/Button'
-import { IAgree } from '@/components/IAgree'
+import { UserLoginType } from '@/api/login/types'
+import { useUserStore } from '@/store/modules/user'
+import { usePermissionStore } from '@/store/modules/permission'
+import { useAppStore } from '@/store/modules/app'
+import { useRouter } from 'vue-router'
+import type { RouteRecordRaw } from 'vue-router'
 
 const emit = defineEmits(['to-login'])
 
 const { formRegister, formMethods } = useForm()
-const { getElFormExpose } = formMethods
+const { getElFormExpose, getFormData } = formMethods
 
 const { t } = useI18n()
 
-const { required, check } = useValidator()
+const { required } = useValidator()
 
-const getCodeTime = ref(60)
-const getCodeLoading = ref(false)
-const getCode = () => {
-  getCodeLoading.value = true
-  const timer = setInterval(() => {
-    getCodeTime.value--
-    if (getCodeTime.value <= 0) {
-      clearInterval(timer)
-      getCodeTime.value = 60
-      getCodeLoading.value = false
-    }
-  }, 1000)
-}
+const userStore = useUserStore()
+const permissionStore = usePermissionStore()
+const appStore = useAppStore()
+
+const { addRoute, push } = useRouter()
 
 const schema = reactive<FormSchema[]>([
   {
@@ -85,60 +82,19 @@ const schema = reactive<FormSchema[]>([
       style: {
         width: '100%'
       },
-      strength: true,
       placeholder: t('login.passwordPlaceholder')
     }
   },
   {
-    field: 'code',
-    label: t('login.code'),
+    field: 'error',
     colProps: {
       span: 24
     },
     formItemProps: {
       slots: {
-        default: (formData) => {
-          return (
-            <div class="w-[100%] flex">
-              <ElInput v-model={formData.code} placeholder={t('login.codePlaceholder')} />
-              <BaseButton
-                type="primary"
-                disabled={unref(getCodeLoading)}
-                class="ml-10px"
-                onClick={getCode}
-              >
-                {t('login.getCode')}
-                {unref(getCodeLoading) ? `(${unref(getCodeTime)})` : ''}
-              </BaseButton>
-            </div>
-          )
-        }
-      }
-    }
-  },
-
-  {
-    field: 'iAgree',
-    colProps: {
-      span: 24
-    },
-    formItemProps: {
-      slots: {
-        default: (formData: any) => {
-          return (
-            <>
-              <IAgree
-                v-model={formData.iAgree}
-                text="我同意《用户协议》"
-                link={[
-                  {
-                    text: '《用户协议》',
-                    url: 'https://element-plus.org/'
-                  }
-                ]}
-              />
-            </>
-          )
+        default: () => {
+          if (!unref(errorMessage)) return null
+          return <div class="text-red-500 text-14px text-left w-[100%]">{unref(errorMessage)}</div>
         }
       }
     }
@@ -178,10 +134,33 @@ const schema = reactive<FormSchema[]>([
 
 const rules: FormRules = {
   username: [required()],
-  password: [required()],
-  check_password: [required()],
-  code: [required()],
-  iAgree: [required(), check()]
+  password: [
+    required(),
+    {
+      validator: (_r, v: string, callback) => {
+        if (v && v.length < 8) {
+          callback(new Error('密码至少 8 个字符'))
+        } else {
+          callback()
+        }
+      }
+    }
+  ],
+  check_password: [
+    required(),
+    {
+      asyncValidator: async (_r, v: string, callback) => {
+        // 与 EditPassword.vue 保持一致：直接从表单数据中读取密码字段进行比较，
+        // 避免依赖 InputPassword 组件的事件透传（onInput 会收到原生事件对象）。
+        const formData = await getFormData<{ password: string }>()
+        if (v && v !== formData.password) {
+          callback(new Error('两次输入的密码不一致'))
+        } else {
+          callback()
+        }
+      }
+    }
+  ]
 }
 
 const toLogin = () => {
@@ -190,13 +169,33 @@ const toLogin = () => {
 
 const loading = ref(false)
 
+const errorMessage = ref('')
+
 const loginRegister = async () => {
   const formRef = await getElFormExpose()
   formRef?.validate(async (valid) => {
     if (valid) {
+      loading.value = true
+      errorMessage.value = ''
       try {
-        loading.value = true
-        toLogin()
+        const formData = await getFormData<UserLoginType>()
+        const ok = await userStore.register(formData)
+        if (ok) {
+          // 注册即登录：进入系统（角色/权限路由仍走 Mock）
+          if (appStore.getDynamicRouter) {
+            push('/')
+          } else {
+            await permissionStore.generateRoutes('static').catch(() => {})
+            permissionStore.getAddRouters.forEach((route) => {
+              addRoute(route as RouteRecordRaw)
+            })
+            permissionStore.setIsAddRouters(true)
+            push('/')
+          }
+        }
+      } catch (error: any) {
+        errorMessage.value =
+          error?.response?.data?.error?.message || error?.message || '注册失败，请稍后重试'
       } finally {
         loading.value = false
       }

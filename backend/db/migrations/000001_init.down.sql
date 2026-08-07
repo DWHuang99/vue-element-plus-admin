@@ -1,0 +1,3 @@
+-- 000001_init.down.sql
+-- Rollback for initial migration.
+-- No schema changes to revert — this is a baseline migration.

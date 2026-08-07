@@ -2,7 +2,6 @@ import { AxiosResponse, InternalAxiosRequestConfig } from './types'
 import { ElMessage } from 'element-plus'
 import qs from 'qs'
 import { SUCCESS_CODE, TRANSFORM_REQUEST_DATA } from '@/constants'
-import { useUserStoreWithOut } from '@/store/modules/user'
 import { objToFormData } from '@/utils'
 
 const defaultRequestInterceptors = (config: InternalAxiosRequestConfig) => {
@@ -39,15 +38,19 @@ const defaultResponseInterceptors = (response: AxiosResponse) => {
   if (response?.config?.responseType === 'blob') {
     // 如果是文件流，直接过
     return response
-  } else if (response.data.code === SUCCESS_CODE) {
-    return response.data
-  } else {
-    ElMessage.error(response?.data?.message)
-    if (response?.data?.code === 401) {
-      const userStore = useUserStoreWithOut()
-      userStore.logout()
-    }
   }
+  const data = response.data
+  // 后端成功信封 `{ data: ... }`（无 code 字段）；原样返回整个响应体。
+  if (data && typeof data === 'object' && !('code' in data) && !('error' in data)) {
+    return response.data
+  }
+  // Mock 成功信封 `{ code: SUCCESS_CODE, data, message }`
+  if (data?.code === SUCCESS_CODE) {
+    return response.data
+  }
+  // 兼容性兜底：2xx 但非成功信封（正常情况下非 2xx 会走 axios 错误路径）
+  ElMessage.error(data?.message || '请求失败')
+  return response.data
 }
 
 export { defaultResponseInterceptors, defaultRequestInterceptors }

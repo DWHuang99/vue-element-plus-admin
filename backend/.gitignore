@@ -1,0 +1,17 @@
+# Binary
+bin/
+
+# Environment
+.env
+
+# Test coverage
+*.out
+coverage/
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db

@@ -13,3 +13,6 @@ dist-ssr
 pnpm-debug
 stats.html
 .idea
+.agents/
+.claude/
+.specify/

@@ -4,6 +4,10 @@ import { defaultRequestInterceptors, defaultResponseInterceptors } from './confi
 import { AxiosInstance, InternalAxiosRequestConfig, RequestConfig, AxiosResponse } from './types'
 import { ElMessage } from 'element-plus'
 import { REQUEST_TIMEOUT } from '@/constants'
+import { useUserStoreWithOut } from '@/store/modules/user'
+
+/** 认证相关端点：401 表示"凭据错误"，不应触发全局登出跳转。 */
+const AUTH_ENDPOINTS = ['/api/v1/auth/login', '/api/v1/auth/register']
 
 export const PATH_URL = import.meta.env.VITE_API_BASE_PATH
 
@@ -34,7 +38,15 @@ axiosInstance.interceptors.response.use(
   },
   (error: AxiosError) => {
     console.log('err： ' + error) // for debug
-    ElMessage.error(error.message)
+    // 提取后端统一错误信封 `{ error: { code, message } }` 中的可读消息。
+    const respData = error.response?.data as { error?: { message?: string } } | undefined
+    const msg = respData?.error?.message || error.message
+    ElMessage.error(msg)
+    // 受保护端点的 401 表示会话失效 → 全局登出跳转；认证端点除外（凭据错误由表单处理）。
+    const url = error.config?.url || ''
+    if (error.response?.status === 401 && !AUTH_ENDPOINTS.some((e) => url.startsWith(e))) {
+      useUserStoreWithOut().logout()
+    }
     return Promise.reject(error)
   }
 )
