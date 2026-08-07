@@ -3,7 +3,6 @@ import { ContentWrap } from '@/components/ContentWrap'
 import { Search } from '@/components/Search'
 import { Dialog } from '@/components/Dialog'
 import { useI18n } from '@/hooks/web/useI18n'
-import { ElTag } from 'element-plus'
 import { Table } from '@/components/Table'
 import {
   getDepartmentApi,
@@ -81,14 +80,26 @@ const crudSchemas = reactive<CrudSchema[]>([
     }
   },
   {
-    field: 'id',
+    field: 'departmentName',
     label: t('userDemo.departmentName'),
+    search: {
+      hidden: true
+    },
+    form: {
+      component: 'Input'
+    }
+  },
+  {
+    field: 'parentId',
+    label: t('userDemo.superiorDepartment'),
+    search: {
+      hidden: true
+    },
     table: {
-      slots: {
-        default: (data: any) => {
-          return <>{data.row.departmentName}</>
-        }
-      }
+      hidden: true
+    },
+    detail: {
+      hidden: true
     },
     form: {
       component: 'TreeSelect',
@@ -96,67 +107,12 @@ const crudSchemas = reactive<CrudSchema[]>([
         nodeKey: 'id',
         props: {
           label: 'departmentName'
-        }
+        },
+        checkStrictly: true
       },
       optionApi: async () => {
         const res = await getDepartmentApi()
         return res.data.list
-      }
-    },
-    detail: {
-      slots: {
-        default: (data: any) => {
-          return <>{data.departmentName}</>
-        }
-      }
-    }
-  },
-  {
-    field: 'status',
-    label: t('userDemo.status'),
-    search: {
-      hidden: true
-    },
-    table: {
-      slots: {
-        default: (data: any) => {
-          const status = data.row.status
-          return (
-            <>
-              <ElTag type={status === 0 ? 'danger' : 'success'}>
-                {status === 1 ? t('userDemo.enable') : t('userDemo.disable')}
-              </ElTag>
-            </>
-          )
-        }
-      }
-    },
-    form: {
-      component: 'Select',
-      componentProps: {
-        options: [
-          {
-            value: 0,
-            label: t('userDemo.disable')
-          },
-          {
-            value: 1,
-            label: t('userDemo.enable')
-          }
-        ]
-      }
-    },
-    detail: {
-      slots: {
-        default: (data: any) => {
-          return (
-            <>
-              <ElTag type={data.status === 0 ? 'danger' : 'success'}>
-                {data.status === 1 ? t('userDemo.enable') : t('userDemo.disable')}
-              </ElTag>
-            </>
-          )
-        }
       }
     }
   },
@@ -168,35 +124,14 @@ const crudSchemas = reactive<CrudSchema[]>([
     },
     form: {
       hidden: true
-    }
-  },
-  {
-    field: 'remark',
-    label: t('userDemo.remark'),
-    search: {
-      hidden: true
-    },
-    form: {
-      component: 'Input',
-      componentProps: {
-        type: 'textarea',
-        rows: 5
-      },
-      colProps: {
-        span: 24
-      }
     },
     detail: {
-      slots: {
-        default: (data: any) => {
-          return <>{data.remark}</>
-        }
-      }
+      hidden: true
     }
   },
   {
     field: 'action',
-    width: '260px',
+    width: '200px',
     label: t('tableDemo.action'),
     search: {
       hidden: true
@@ -274,7 +209,8 @@ const save = async () => {
   const formData = await write?.submit()
   if (formData) {
     saveLoading.value = true
-    const res = await saveDepartmentApi(formData)
+    // 编辑时带上当前行 id（表单不含 id 字段），新建时为空 → 创建。
+    const res = await saveDepartmentApi({ ...formData, id: unref(currentRow)?.id })
       .catch(() => {})
       .finally(() => {
         saveLoading.value = false

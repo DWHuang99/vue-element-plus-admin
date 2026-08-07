@@ -18,10 +18,11 @@ const props = defineProps({
   }
 })
 
-const rules = reactive({
+const rules = reactive<Record<string, any[]>>({
   username: [required()],
   account: [required()],
-  'department.id': [required()]
+  'department.id': [required()],
+  password: [required()]
 })
 
 const { formRegister, formMethods } = useForm()
@@ -41,6 +42,13 @@ const submit = async () => {
 watch(
   () => props.currentRow,
   (currentRow) => {
+    if (currentRow) {
+      // 编辑：密码留空表示不修改（后端保留原密码），因此不强制必填。
+      rules.password = []
+    } else {
+      // 新建：密码必填。
+      rules.password = [required()]
+    }
     if (!currentRow) return
     setValues(currentRow)
   },

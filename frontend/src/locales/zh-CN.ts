@@ -559,6 +559,7 @@ export default {
   },
   role: {
     roleName: '角色名称',
+    code: '角色编码',
     role: '角色',
     menu: '菜单分配'
   },

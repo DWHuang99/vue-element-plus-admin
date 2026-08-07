@@ -1,7 +1,9 @@
-/** 部门树节点（真实后端响应 name→departmentName 已映射；id 为字符串以匹配模板）。 */
+/** 部门树节点（真实后端响应 name→departmentName 已映射；id 为字符串以匹配模板）。
+ * parentId 为上级部门 id（根部门为 undefined），编辑时用于回填上级选择。 */
 export interface DepartmentItem {
   id: string
   departmentName: string
+  parentId?: string
   children?: DepartmentItem[]
 }
 

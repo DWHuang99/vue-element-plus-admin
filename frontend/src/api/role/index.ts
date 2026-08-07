@@ -18,3 +18,23 @@ export const getRoleListApi = async (): Promise<IResponse<RoleListResponse>> => 
     }
   }
 }
+
+/** 保存角色（POST /api/v1/roles）。表单 roleName/code → name/code；id 用于编辑。 */
+export const saveRoleApi = (data: any): Promise<IResponse> => {
+  return request.post({
+    url: '/api/v1/roles',
+    data: {
+      id: data.id ? Number(data.id) : undefined,
+      name: data.roleName,
+      code: data.code
+    }
+  })
+}
+
+/** 删除角色（POST /api/v1/roles/delete）。 */
+export const deleteRoleApi = (ids: string[] | number[]): Promise<IResponse> => {
+  return request.post({
+    url: '/api/v1/roles/delete',
+    data: { ids: ids.map(Number) }
+  })
+}

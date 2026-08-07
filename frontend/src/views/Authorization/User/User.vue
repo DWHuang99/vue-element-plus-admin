@@ -80,6 +80,22 @@ const crudSchemas = reactive<CrudSchema[]>([
     label: t('userDemo.account')
   },
   {
+    field: 'password',
+    label: t('userDemo.password'),
+    form: {
+      component: 'Input',
+      componentProps: {
+        type: 'password',
+        showPassword: true,
+        placeholder: t('userDemo.password')
+      }
+    },
+    // 新建时必填（Write.vue 按是否编辑动态校验）；编辑时留空表示不修改密码。
+    table: { hidden: true },
+    search: { hidden: true },
+    detail: { hidden: true }
+  },
+  {
     field: 'department.id',
     label: t('userDemo.department'),
     detail: {
@@ -147,7 +163,7 @@ const crudSchemas = reactive<CrudSchema[]>([
     field: 'createTime',
     label: t('userDemo.createTime'),
     form: {
-      component: 'Input'
+      hidden: true
     },
     search: {
       hidden: true
@@ -277,7 +293,8 @@ const save = async () => {
   if (formData) {
     saveLoading.value = true
     try {
-      const res = await saveUserApi(formData)
+      // 编辑时带上当前行 id（表单不含 id 字段），新建时为空 → 创建。
+      const res = await saveUserApi({ ...formData, id: unref(currentRow)?.id })
       if (res) {
         currentPage.value = 1
         getList()

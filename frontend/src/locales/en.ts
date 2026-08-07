@@ -569,6 +569,7 @@ export default {
   },
   role: {
     roleName: 'Role name',
+    code: 'Role code',
     role: 'Role',
     // 菜单分配
     menu: 'Menu allocation'

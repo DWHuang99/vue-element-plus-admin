@@ -7,11 +7,12 @@ import {
   DepartmentUserResponse
 } from './types'
 
-/** 后端部门树节点（name/parent_id/children）→ 前端树节点（departmentName/children）。 */
+/** 后端部门树节点（name/parent_id/children）→ 前端树节点（departmentName/parentId/children）。 */
 const toDepartmentTree = (nodes: any[]): DepartmentItem[] => {
   return (nodes || []).map((n) => ({
     id: String(n.id),
     departmentName: n.name,
+    parentId: n.parent_id ? String(n.parent_id) : undefined,
     children: n.children ? toDepartmentTree(n.children) : undefined
   }))
 }
@@ -69,15 +70,14 @@ export const getDepartmentTableApi = async (
   }
 }
 
-/** 保存部门（POST /api/v1/departments）。表单 parentId/parent_id→parent_id、departmentName→name。 */
+/** 保存部门（POST /api/v1/departments）。表单 departmentName→name、parentId→parent_id；id 用于编辑。 */
 export const saveDepartmentApi = (data: any): Promise<IResponse> => {
-  const parentId = data.parentId ?? data.parent_id ?? data.id
   return request.post({
     url: '/api/v1/departments',
     data: {
       id: data.id ? Number(data.id) : undefined,
       name: data.departmentName,
-      parent_id: parentId ? Number(parentId) : null
+      parent_id: data.parentId ? Number(data.parentId) : null
     }
   })
 }

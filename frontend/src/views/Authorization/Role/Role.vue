@@ -1,19 +1,33 @@
 <script setup lang="tsx">
 import { reactive, ref, unref } from 'vue'
-import { getRoleListApi } from '@/api/role'
+import { getRoleListApi, saveRoleApi, deleteRoleApi } from '@/api/role'
 import { useTable } from '@/hooks/web/useTable'
 import { useI18n } from '@/hooks/web/useI18n'
 import { Table, TableColumn } from '@/components/Table'
-import { ElTag } from 'element-plus'
-import { Search } from '@/components/Search'
-import { FormSchema } from '@/components/Form'
 import { ContentWrap } from '@/components/ContentWrap'
+import { FormSchema } from '@/components/Form'
 import Write from './components/Write.vue'
 import Detail from './components/Detail.vue'
 import { Dialog } from '@/components/Dialog'
 import { BaseButton } from '@/components/Button'
 
 const { t } = useI18n()
+
+// 角色表单字段：真实后端角色仅包含 名称 + 编码。
+const roleFormSchema = reactive<FormSchema[]>([
+  {
+    field: 'roleName',
+    label: t('role.roleName'),
+    component: 'Input'
+  },
+  {
+    field: 'code',
+    label: t('role.code'),
+    component: 'Input'
+  }
+])
+
+const ids = ref<string[]>([])
 
 const { tableRegister, tableState, tableMethods } = useTable({
   fetchDataApi: async () => {
@@ -22,13 +36,21 @@ const { tableRegister, tableState, tableMethods } = useTable({
       list: res.data.list || [],
       total: res.data.total
     }
+  },
+  fetchDelApi: async () => {
+    const res = await deleteRoleApi(unref(ids))
+    return !!res
   }
 })
 
 const { dataList, loading, total } = tableState
-const { getList } = tableMethods
+const { getList, getElTableExpose, delList } = tableMethods
 
 const tableColumns = reactive<TableColumn[]>([
+  {
+    field: 'selection',
+    type: 'selection'
+  },
   {
     field: 'index',
     label: t('userDemo.index'),
@@ -39,27 +61,12 @@ const tableColumns = reactive<TableColumn[]>([
     label: t('role.roleName')
   },
   {
-    field: 'status',
-    label: t('menu.status'),
-    slots: {
-      default: (data: any) => {
-        return (
-          <>
-            <ElTag type={data.row.status === 0 ? 'danger' : 'success'}>
-              {data.row.status === 1 ? t('userDemo.enable') : t('userDemo.disable')}
-            </ElTag>
-          </>
-        )
-      }
-    }
+    field: 'code',
+    label: t('role.code')
   },
   {
     field: 'createTime',
     label: t('tableDemo.displayTime')
-  },
-  {
-    field: 'remark',
-    label: t('userDemo.remark')
   },
   {
     field: 'action',
@@ -76,27 +83,15 @@ const tableColumns = reactive<TableColumn[]>([
             <BaseButton type="success" onClick={() => action(row, 'detail')}>
               {t('exampleDemo.detail')}
             </BaseButton>
-            <BaseButton type="danger">{t('exampleDemo.del')}</BaseButton>
+            <BaseButton type="danger" onClick={() => delData(row)}>
+              {t('exampleDemo.del')}
+            </BaseButton>
           </>
         )
       }
     }
   }
 ])
-
-const searchSchema = reactive<FormSchema[]>([
-  {
-    field: 'roleName',
-    label: t('role.roleName'),
-    component: 'Input'
-  }
-])
-
-const searchParams = ref({})
-const setSearchParams = (data: any) => {
-  searchParams.value = data
-  getList()
-}
 
 const dialogVisible = ref(false)
 const dialogTitle = ref('')
@@ -122,24 +117,43 @@ const AddAction = () => {
   actionType.value = ''
 }
 
+const delLoading = ref(false)
+
+const delData = async (row?: any) => {
+  const elTableExpose = await getElTableExpose()
+  ids.value = row ? [row.id] : elTableExpose?.getSelectionRows().map((v: any) => v.id) || []
+  delLoading.value = true
+  await delList(unref(ids).length).finally(() => {
+    delLoading.value = false
+  })
+}
+
 const save = async () => {
   const write = unref(writeRef)
   const formData = await write?.submit()
   if (formData) {
     saveLoading.value = true
-    setTimeout(() => {
+    try {
+      // 编辑时带上当前行 id（表单不含 id 字段），新建时为空 → 创建。
+      const res = await saveRoleApi({ ...formData, id: unref(currentRow)?.id })
+      if (res) {
+        dialogVisible.value = false
+        getList()
+      }
+    } finally {
       saveLoading.value = false
-      dialogVisible.value = false
-    }, 1000)
+    }
   }
 }
 </script>
 
 <template>
   <ContentWrap>
-    <Search :schema="searchSchema" @reset="setSearchParams" @search="setSearchParams" />
     <div class="mb-10px">
       <BaseButton type="primary" @click="AddAction">{{ t('exampleDemo.add') }}</BaseButton>
+      <BaseButton :loading="delLoading" type="danger" @click="delData()">
+        {{ t('exampleDemo.del') }}
+      </BaseButton>
     </div>
     <Table
       :columns="tableColumns"
@@ -155,7 +169,12 @@ const save = async () => {
   </ContentWrap>
 
   <Dialog v-model="dialogVisible" :title="dialogTitle">
-    <Write v-if="actionType !== 'detail'" ref="writeRef" :current-row="currentRow" />
+    <Write
+      v-if="actionType !== 'detail'"
+      ref="writeRef"
+      :form-schema="roleFormSchema"
+      :current-row="currentRow"
+    />
     <Detail v-else :current-row="currentRow" />
 
     <template #footer>
