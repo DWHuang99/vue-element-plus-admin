@@ -56,8 +56,11 @@ export const useAppStore = defineStore('app', {
       fixedHeader: true, // 固定toolheader
       footer: true, // 显示页脚
       greyMode: false, // 是否开始灰色模式，用于特殊悼念日
-      dynamicRouter: true, // 是否动态路由
-      serverDynamicRouter: true, // 是否服务端渲染动态路由
+      // Static routing (phase 1): Login/Register navigate via the hard-coded
+      // static branch in LoginForm/RegisterForm. DynamicRouter is re-enabled
+      // only when the server starts serving route trees.
+      dynamicRouter: false, // 是否动态路由
+      serverDynamicRouter: false, // 是否服务端渲染动态路由
       fixedMenu: false, // 是否固定菜单
 
       layout: 'classic', // layout布局
@@ -332,7 +335,12 @@ export const useAppStore = defineStore('app', {
       newTitle !== this.getTitle && this.setTitle(newTitle)
     }
   },
-  persist: true
+  // Omit the router-mode flags from persistence: a previously persisted
+  // `dynamicRouter: true` from an older build would otherwise rehydrate over
+  // these new defaults and silently re-enable dynamic routing.
+  persist: {
+    omit: ['dynamicRouter', 'serverDynamicRouter']
+  }
 })
 
 export const useAppStoreWithOut = () => {
