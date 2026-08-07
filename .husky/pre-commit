@@ -1,2 +1,1 @@
-pnpm --dir frontend run ts:check
-pnpm --dir frontend run lint:lint-staged
+cd frontend && pnpm run ts:check && pnpm run lint:lint-staged

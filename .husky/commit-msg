@@ -1,1 +1,2 @@
-pnpm --dir frontend exec commitlint --edit $1
+MSG_FILE="$(pwd)/$1"
+cd frontend && pnpm exec commitlint --edit "$MSG_FILE"
