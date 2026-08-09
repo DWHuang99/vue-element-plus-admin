@@ -19,3 +19,6 @@ stats.html
 
 # Claude 交接文档（会话间传递，不入库）
 **/claude-handoff*.md
+
+# dev.sh 运行日志
+.dev/

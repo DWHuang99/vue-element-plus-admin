@@ -1,0 +1,16 @@
+# 不要把本地开发配置/密钥拷进镜像（运行配置走 compose environment）
+.env
+.env.*
+
+# 构建产物与本地缓存
+bin/
+*.log
+coverage*.out
+
+# VCS / 无关文件
+.git
+.gitignore
+Dockerfile
+.dockerignore
+docker-compose.yml
+compose.yaml

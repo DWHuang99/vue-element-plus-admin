@@ -1,0 +1,50 @@
+# 开发环境 docker project：PostgreSQL + 后端 API（从本仓库 cmd/server 构建）
+#
+# 启动：cd backend && docker compose up -d          （或直接用根目录 ./dev.sh）
+# 停止：docker compose down                        （-v 连同数据卷一起删）
+#
+# 注意：容器名/项目名与既有的 scaffold-postgres、vue-element-plus-admin-backend-*
+#       （D:\ 盘 compose 栈）互不相同，避免冲突；但端口 5432/8080 是共享的，
+#       不要同时运行多套栈。
+name: vue-element-plus-admin
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: vue-element-plus-admin-postgres
+    environment:
+      POSTGRES_USER: scaffold
+      POSTGRES_PASSWORD: scaffold_dev
+      POSTGRES_DB: scaffold_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scaffold -d scaffold_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: vue-element-plus-admin-api:latest
+    container_name: vue-element-plus-admin-api
+    ports:
+      - "8080:8080"
+    environment:
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: "8080"
+      DATABASE_URL: postgres://scaffold:scaffold_dev@postgres:5432/scaffold_dev?sslmode=disable
+      LOG_LEVEL: info
+      LOG_FORMAT: text
+      # CORS_ALLOWED_ORIGINS: 留空 = 允许所有来源（开发模式，与本地 .env 行为一致）。
+      # 生产环境必须显式配置逗号分隔的白名单，例如 http://localhost:4000。
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
