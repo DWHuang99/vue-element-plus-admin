@@ -43,14 +43,14 @@ const save = async () => {
       })
     if (res) {
       emit('getList', 'editor')
-      push('/example/example-page')
+      push('/demo/example/example-page')
     }
   }
 }
 </script>
 
 <template>
-  <ContentDetailWrap :title="t('exampleDemo.edit')" @back="push('/example/example-page')">
+  <ContentDetailWrap :title="t('exampleDemo.edit')" @back="push('/demo/example/example-page')">
     <Write ref="writeRef" :current-row="currentRow" />
 
     <template #header>

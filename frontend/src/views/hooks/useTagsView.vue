@@ -10,7 +10,7 @@ const { closeAll, closeLeft, closeRight, closeOther, closeCurrent, refreshPage, 
 
 const closeAllTabs = () => {
   closeAll(() => {
-    push('/dashboard/analysis')
+    push('/demo/dashboard/analysis')
   })
 }
 
@@ -32,7 +32,7 @@ const refresh = () => {
 
 const closeCurrentTab = () => {
   closeCurrent(undefined, () => {
-    push('/dashboard/analysis')
+    push('/demo/dashboard/analysis')
   })
 }
 
@@ -41,7 +41,7 @@ const setTabTitle = () => {
 }
 
 const setAnalysisTitle = () => {
-  setTitle(`分析页-${new Date().getTime().toString()}`, '/dashboard/analysis')
+  setTitle(`分析页-${new Date().getTime().toString()}`, '/demo/dashboard/analysis')
 }
 </script>
 

@@ -26,7 +26,7 @@ getTableDet()
 </script>
 
 <template>
-  <ContentDetailWrap :title="t('exampleDemo.detail')" @back="push('/example/example-page')">
+  <ContentDetailWrap :title="t('exampleDemo.detail')" @back="push('/demo/example/example-page')">
     <template #header>
       <BaseButton @click="go(-1)">
         {{ t('common.back') }}
