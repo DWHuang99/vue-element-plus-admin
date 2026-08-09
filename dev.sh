@@ -21,6 +21,8 @@ FRONTEND_URL="http://localhost:4000"
 
 REBUILD=1
 KEEP=0
+# 脚本是否代为启动了 scaffold-postgres（退出时若为 1 且非 --keep 则停掉它）
+POSTGRES_STARTED=0
 
 usage() {
   cat <<'EOF'
@@ -65,7 +67,40 @@ preflight() {
   log "预检通过。"
 }
 
+# 复用既有 scaffold-postgres（backend/docker-compose.yml 项目，数据卷 backend_pgdata），
+# 不另起空 postgres，保留已有数据。
+ensure_postgres() {
+  local running
+  running="$(docker inspect -f '{{.State.Running}}' scaffold-postgres 2>/dev/null || true)"
+  if [[ "$running" == "true" ]]; then
+    log "既有 postgres (scaffold-postgres) 已在运行，直接复用（数据卷 backend_pgdata）。"
+    return 0
+  fi
+  if docker inspect scaffold-postgres >/dev/null 2>&1; then
+    log "启动既有 postgres 容器 scaffold-postgres（数据卷 backend_pgdata 保留）..."
+    docker start scaffold-postgres
+    POSTGRES_STARTED=1
+  else
+    log "scaffold-postgres 不存在，用 backend/docker-compose.yml 重建（数据卷 backend_pgdata 保留）..."
+    docker compose -f "$ROOT/backend/docker-compose.yml" up -d
+    POSTGRES_STARTED=1
+  fi
+  log "等待 postgres 就绪..."
+  local i=0
+  until docker exec scaffold-postgres pg_isready -U scaffold -d scaffold_dev >/dev/null 2>&1; do
+    i=$((i+2))
+    if [[ $i -ge 60 ]]; then
+      err "postgres 60s 内未就绪。诊断: docker logs scaffold-postgres"
+      return 1
+    fi
+    sleep 2
+  done
+  log "postgres 就绪。"
+}
+
 start_backend() {
+  ensure_postgres
+
   if [[ "$REBUILD" -eq 1 ]]; then
     log "构建后端镜像（源码: backend/cmd/server）..."
     docker compose -f "$COMPOSE_FILE" build api
@@ -73,7 +108,7 @@ start_backend() {
     log "跳过构建，使用已有镜像。"
   fi
 
-  log "启动 postgres + api 容器..."
+  log "启动 api 容器（连接既有 scaffold-postgres）..."
   docker compose -f "$COMPOSE_FILE" up -d
 
   # 就绪检查：直接在容器内探测 /health/ready，与 WSL 网络模式无关。
@@ -138,6 +173,10 @@ cleanup() {
   if [[ "$KEEP" -eq 0 ]]; then
     log "docker compose stop（加 --keep 可保留容器运行）..."
     docker compose -f "$COMPOSE_FILE" stop >/dev/null 2>&1 || true
+    if [[ "$POSTGRES_STARTED" -eq 1 ]]; then
+      log "停止脚本代为启动的 scaffold-postgres ..."
+      docker stop scaffold-postgres >/dev/null 2>&1 || true
+    fi
   else
     log "按 --keep 保留容器运行：docker compose -f $COMPOSE_FILE ps"
   fi

@@ -1,31 +1,15 @@
-# 开发环境 docker project：PostgreSQL + 后端 API（从本仓库 cmd/server 构建）
+# 开发环境 docker project：后端 API（从本仓库 backend/cmd/server 构建）
 #
-# 启动：cd backend && docker compose up -d          （或直接用根目录 ./dev.sh）
-# 停止：docker compose down                        （-v 连同数据卷一起删）
+# PostgreSQL 复用既有 scaffold-postgres 容器（backend/docker-compose.yml 项目，
+# 数据卷 backend_pgdata，库 scaffold_dev）。api 通过 host.docker.internal 访问
+# 主机上发布的 5432 端口，不另起空的 postgres，既有数据原地保留。
 #
-# 注意：容器名/项目名与既有的 scaffold-postgres、vue-element-plus-admin-backend-*
-#       （D:\ 盘 compose 栈）互不相同，避免冲突；但端口 5432/8080 是共享的，
-#       不要同时运行多套栈。
+# 启动：根目录 ./dev.sh（自动先确保 scaffold-postgres 在跑）或
+#       cd backend && docker compose up -d（需先自行启动 scaffold-postgres）
+# 停止：docker compose down     （只停 api，不动 scaffold-postgres）
 name: vue-element-plus-admin
 
 services:
-  postgres:
-    image: postgres:17-alpine
-    container_name: vue-element-plus-admin-postgres
-    environment:
-      POSTGRES_USER: scaffold
-      POSTGRES_PASSWORD: scaffold_dev
-      POSTGRES_DB: scaffold_dev
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U scaffold -d scaffold_dev"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
   api:
     build:
       context: .
@@ -37,14 +21,9 @@ services:
     environment:
       SERVER_HOST: 0.0.0.0
       SERVER_PORT: "8080"
-      DATABASE_URL: postgres://scaffold:scaffold_dev@postgres:5432/scaffold_dev?sslmode=disable
+      # 走主机发布的 5432 端口连接既有 postgres（Docker Desktop 上 host.docker.internal = 宿主机）
+      DATABASE_URL: postgres://scaffold:scaffold_dev@host.docker.internal:5432/scaffold_dev?sslmode=disable
       LOG_LEVEL: info
       LOG_FORMAT: text
       # CORS_ALLOWED_ORIGINS: 留空 = 允许所有来源（开发模式，与本地 .env 行为一致）。
       # 生产环境必须显式配置逗号分隔的白名单，例如 http://localhost:4000。
-    depends_on:
-      postgres:
-        condition: service_healthy
-
-volumes:
-  postgres_data:
