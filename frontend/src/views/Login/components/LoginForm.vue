@@ -57,7 +57,7 @@ const schema = reactive<FormSchema[]>([
       span: 24
     },
     componentProps: {
-      placeholder: 'admin or test'
+      placeholder: t('login.usernamePlaceholder')
     }
   },
   {
@@ -72,12 +72,25 @@ const schema = reactive<FormSchema[]>([
       style: {
         width: '100%'
       },
-      placeholder: 'admin or test',
+      placeholder: t('login.passwordPlaceholder'),
       // 按下enter键触发登录
       onKeydown: (_e: any) => {
         if (_e.key === 'Enter') {
           _e.stopPropagation() // 阻止事件冒泡
           signIn()
+        }
+      }
+    }
+  },
+  {
+    field: 'firstUseHint',
+    colProps: {
+      span: 24
+    },
+    formItemProps: {
+      slots: {
+        default: () => {
+          return <ElAlert title={t('login.firstUseHint')} type="info" show-icon closable={false} />
         }
       }
     }

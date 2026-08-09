@@ -118,8 +118,9 @@ export default {
     remember: 'Remember me',
     hasUser: 'Existing account? Go to login',
     forgetPassword: 'Forget password',
-    usernamePlaceholder: 'Please input username',
-    passwordPlaceholder: 'Please input password',
+    usernamePlaceholder: 'Enter a registered username',
+    passwordPlaceholder: 'Enter an 8-72 character password',
+    firstUseHint: 'No default admin/admin account is provided. Register an account first.',
     code: 'Verification code',
     codePlaceholder: 'Please input verification code',
     getCode: 'Get code'

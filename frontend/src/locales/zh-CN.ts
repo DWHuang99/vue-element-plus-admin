@@ -116,8 +116,9 @@ export default {
     remember: '记住我',
     hasUser: '已有账号？去登录',
     forgetPassword: '忘记密码',
-    usernamePlaceholder: '请输入用户名',
-    passwordPlaceholder: '请输入密码',
+    usernamePlaceholder: '请输入已注册用户名',
+    passwordPlaceholder: '请输入 8-72 位密码',
+    firstUseHint: '真实后端不提供默认 admin/admin 账号，首次使用请先注册。',
     code: '验证码',
     codePlaceholder: '请输入验证码',
     getCode: '获取验证码'
