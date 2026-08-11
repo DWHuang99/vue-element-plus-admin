@@ -1,22 +1,14 @@
 <script lang="ts" setup>
 import { ref } from 'vue'
 import { ElInput } from 'element-plus'
-import { resetRouter } from '@/router'
-import { useRouter } from 'vue-router'
-import { useStorage } from '@/hooks/web/useStorage'
+import { useUserStore } from '@/store/modules/user'
 import { useLockStore } from '@/store/modules/lock'
 import { useI18n } from '@/hooks/web/useI18n'
 import { useNow } from '@/hooks/web/useNow'
 import { useDesign } from '@/hooks/web/useDesign'
 import { Icon } from '@/components/Icon'
-import { loginOutApi } from '@/api/login'
-import { useTagsViewStore } from '@/store/modules/tagsView'
 
-const tagsViewStore = useTagsViewStore()
-
-const { clear } = useStorage()
-
-const { replace } = useRouter()
+const userStore = useUserStore()
 
 const password = ref('')
 const loading = ref(false)
@@ -49,14 +41,8 @@ async function unLock() {
 
 // 返回登录
 async function goLogin() {
-  const res = await loginOutApi().catch(() => {})
-  if (res) {
-    clear()
-    tagsViewStore.delAllViews()
-    resetRouter() // 重置静态路由表
-    lockStore.resetLockInfo()
-    replace('/login')
-  }
+  lockStore.resetLockInfo()
+  await userStore.logout()
 }
 
 const passwordInputRef = ref<ComponentRef<typeof ElInput>>()

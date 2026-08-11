@@ -3,6 +3,7 @@ export interface RoleListItem {
   id: string
   roleName: string
   code: string
+  isBuiltin: boolean
   createTime: string
 }
 

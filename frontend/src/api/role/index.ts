@@ -8,6 +8,7 @@ export const getRoleListApi = async (): Promise<IResponse<RoleListResponse>> => 
     id: String(r.id),
     roleName: r.name,
     code: r.code,
+    isBuiltin: Boolean(r.is_builtin),
     createTime: r.created_at
   }))
   return {

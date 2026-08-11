@@ -649,59 +649,6 @@ const adminList = [
         ]
       }
     ]
-  },
-  {
-    path: '/external-link',
-    component: '#',
-    meta: {},
-    name: 'ExternalLink',
-    children: [
-      {
-        path: 'https://element-plus-admin-doc.cn/',
-        name: 'DocumentLink',
-        meta: {
-          title: 'router.document',
-          icon: 'vi-clarity:document-solid'
-        }
-      }
-    ]
-  },
-  {
-    path: '/authorization',
-    component: '#',
-    redirect: '/authorization/user',
-    name: 'Authorization',
-    meta: {
-      title: 'router.authorization',
-      icon: 'vi-eos-icons:role-binding',
-      alwaysShow: true
-    },
-    children: [
-      {
-        path: 'department',
-        component: 'views/Authorization/Department/Department',
-        name: 'Department',
-        meta: {
-          title: 'router.department'
-        }
-      },
-      {
-        path: 'user',
-        component: 'views/Authorization/User/User',
-        name: 'User',
-        meta: {
-          title: 'router.user'
-        }
-      },
-      {
-        path: 'role',
-        component: 'views/Authorization/Role/Role',
-        name: 'Role',
-        meta: {
-          title: 'router.role'
-        }
-      }
-    ]
   }
 ]
 
@@ -774,13 +721,7 @@ const testList: string[] = [
   '/demo/error',
   '/demo/error/404-demo',
   '/demo/error/403-demo',
-  '/demo/error/500-demo',
-  '/authorization',
-  '/authorization/department',
-  '/authorization/user',
-  '/authorization/role',
-  '/external-link',
-  'https://element-plus-admin-doc.cn/'
+  '/demo/error/500-demo'
 ]
 const List: any[] = []
 

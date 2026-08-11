@@ -25,7 +25,8 @@
     "lint:lint-staged": "lint-staged -c ../.husky/lintstagedrc.cjs",
     "prepare": "cd .. && husky",
     "p": "plop",
-    "icon": "esno ./scripts/icon.ts"
+    "icon": "esno ./scripts/icon.ts",
+    "test:access-control": "esno ./scripts/access-control.test.ts"
   },
   "dependencies": {
     "@iconify/iconify": "^3.1.1",

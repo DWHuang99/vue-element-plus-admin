@@ -1,4 +1,5 @@
 import request from '@/axios'
+import { idempotencyKeyFor, isDefiniteOutcome, markIdempotencyKnown } from '@/utils/idempotency'
 import {
   DepartmentItem,
   DepartmentListResponse,
@@ -116,24 +117,59 @@ export const getUserByIdApi = async (
 
 /** 保存用户（POST /api/v1/users）。表单 department→department_id、role→roles。 */
 export const saveUserApi = (data: any): Promise<IResponse> => {
-  return request.post({
-    url: '/api/v1/users',
-    data: {
-      id: data.id ? Number(data.id) : undefined,
-      username: data.username,
-      account: data.account,
-      email: data.email,
-      password: data.password,
-      department_id: data.department?.id ? Number(data.department.id) : null,
-      roles: (data.role || []).map(Number)
-    }
-  })
+  const scope = `user.save:${data.id ? Number(data.id) : 'create'}`
+  // payload 覆盖后端请求指纹的全部 safe 字段（username/account/email/department_id/roles）：
+  // 结果未知期间改其中任一项 → 换新 key，避免同 key 冲突 payload → 409 IDEMPOTENCY_CONFLICT。
+  const key = idempotencyKeyFor(
+    scope,
+    data.password ?? '',
+    `${data.username ?? ''}:${data.account ?? ''}:${data.email ?? ''}:${
+      data.department?.id ? Number(data.department.id) : 'null'
+    }:${(data.role || []).map(Number).join(',')}`
+  )
+  return request
+    .post({
+      url: '/api/v1/users',
+      headers: { 'Idempotency-Key': key },
+      data: {
+        id: data.id ? Number(data.id) : undefined,
+        username: data.username,
+        account: data.account,
+        email: data.email,
+        password: data.password,
+        department_id: data.department?.id ? Number(data.department.id) : null,
+        roles: (data.role || []).map(Number)
+      }
+    })
+    .then((res) => {
+      markIdempotencyKnown(scope)
+      return res
+    })
+    .catch((err) => {
+      // 只有明确终态才放行新 key；超时/网络/502/503/504（结果未知）保留原 key，
+      // 同 credential 的下一次提交继续复用（axios 层已自动重试，这里兜底用户重试）。
+      if (isDefiniteOutcome(err)) markIdempotencyKnown(scope)
+      throw err
+    })
 }
 
-/** 删除用户（POST /api/v1/users/delete）。 */
+/** 删除用户（POST /api/v1/users/delete）。同目标集合一次逻辑删除一个幂等键。 */
 export const deleteUserByIdApi = (ids: string[] | number[]): Promise<IResponse> => {
-  return request.post({
-    url: '/api/v1/users/delete',
-    data: { ids: ids.map(Number) }
-  })
+  const targets = ids.map(Number).sort((a, b) => a - b)
+  const scope = `user.delete:${targets.join(',')}`
+  const key = idempotencyKeyFor(scope, '', targets.join(','))
+  return request
+    .post({
+      url: '/api/v1/users/delete',
+      headers: { 'Idempotency-Key': key },
+      data: { ids: targets }
+    })
+    .then((res) => {
+      markIdempotencyKnown(scope)
+      return res
+    })
+    .catch((err) => {
+      if (isDefiniteOutcome(err)) markIdempotencyKnown(scope)
+      throw err
+    })
 }

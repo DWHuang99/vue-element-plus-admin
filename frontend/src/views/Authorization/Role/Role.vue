@@ -1,6 +1,7 @@
 <script setup lang="tsx">
-import { reactive, ref, unref } from 'vue'
+import { computed, reactive, ref, unref } from 'vue'
 import { getRoleListApi, saveRoleApi, deleteRoleApi } from '@/api/role'
+import type { RoleListItem } from '@/api/role/types'
 import { useTable } from '@/hooks/web/useTable'
 import { useI18n } from '@/hooks/web/useI18n'
 import { Table, TableColumn } from '@/components/Table'
@@ -10,8 +11,14 @@ import Write from './components/Write.vue'
 import Detail from './components/Detail.vue'
 import { Dialog } from '@/components/Dialog'
 import { BaseButton } from '@/components/Button'
+import { useUserStore } from '@/store/modules/user'
+import { hasEffectivePermission } from '@/utils/accessControl'
 
 const { t } = useI18n()
+const userStore = useUserStore()
+const canWrite = computed(() =>
+  hasEffectivePermission(userStore.getEffectivePermissions, 'roles.write')
+)
 
 // 角色表单字段：真实后端角色仅包含 名称 + 编码。
 const roleFormSchema = reactive<FormSchema[]>([
@@ -49,7 +56,8 @@ const { getList, getElTableExpose, delList } = tableMethods
 const tableColumns = reactive<TableColumn[]>([
   {
     field: 'selection',
-    type: 'selection'
+    type: 'selection',
+    selectable: (row: RoleListItem) => !row.isBuiltin
   },
   {
     field: 'index',
@@ -77,15 +85,19 @@ const tableColumns = reactive<TableColumn[]>([
         const row = data.row
         return (
           <>
-            <BaseButton type="primary" onClick={() => action(row, 'edit')}>
-              {t('exampleDemo.edit')}
-            </BaseButton>
+            {unref(canWrite) ? (
+              <BaseButton type="primary" onClick={() => action(row, 'edit')}>
+                {t('exampleDemo.edit')}
+              </BaseButton>
+            ) : null}
             <BaseButton type="success" onClick={() => action(row, 'detail')}>
               {t('exampleDemo.detail')}
             </BaseButton>
-            <BaseButton type="danger" onClick={() => delData(row)}>
-              {t('exampleDemo.del')}
-            </BaseButton>
+            {unref(canWrite) && !row.isBuiltin ? (
+              <BaseButton type="danger" onClick={() => delData(row)}>
+                {t('exampleDemo.del')}
+              </BaseButton>
+            ) : null}
           </>
         )
       }
@@ -150,8 +162,10 @@ const save = async () => {
 <template>
   <ContentWrap>
     <div class="mb-10px">
-      <BaseButton type="primary" @click="AddAction">{{ t('exampleDemo.add') }}</BaseButton>
-      <BaseButton :loading="delLoading" type="danger" @click="delData()">
+      <BaseButton v-if="canWrite" type="primary" @click="AddAction">
+        {{ t('exampleDemo.add') }}
+      </BaseButton>
+      <BaseButton v-if="canWrite" :loading="delLoading" type="danger" @click="delData()">
         {{ t('exampleDemo.del') }}
       </BaseButton>
     </div>
@@ -179,7 +193,7 @@ const save = async () => {
 
     <template #footer>
       <BaseButton
-        v-if="actionType !== 'detail'"
+        v-if="actionType !== 'detail' && canWrite"
         type="primary"
         :loading="saveLoading"
         @click="save"

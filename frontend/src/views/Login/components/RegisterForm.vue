@@ -8,10 +8,7 @@ import { useValidator } from '@/hooks/web/useValidator'
 import { BaseButton } from '@/components/Button'
 import { UserLoginType } from '@/api/login/types'
 import { useUserStore } from '@/store/modules/user'
-import { usePermissionStore } from '@/store/modules/permission'
-import { useAppStore } from '@/store/modules/app'
 import { useRouter } from 'vue-router'
-import type { RouteRecordRaw } from 'vue-router'
 
 const emit = defineEmits(['to-login'])
 
@@ -23,10 +20,8 @@ const { t } = useI18n()
 const { required } = useValidator()
 
 const userStore = useUserStore()
-const permissionStore = usePermissionStore()
-const appStore = useAppStore()
 
-const { addRoute, push } = useRouter()
+const { push } = useRouter()
 
 const schema = reactive<FormSchema[]>([
   {
@@ -181,17 +176,8 @@ const loginRegister = async () => {
         const formData = await getFormData<UserLoginType>()
         const ok = await userStore.register(formData)
         if (ok) {
-          // 注册即登录：进入系统（角色/权限路由仍走 Mock）
-          if (appStore.getDynamicRouter) {
-            push('/')
-          } else {
-            await permissionStore.generateRoutes('static').catch(() => {})
-            permissionStore.getAddRouters.forEach((route) => {
-              addRoute(route as RouteRecordRaw)
-            })
-            permissionStore.setIsAddRouters(true)
-            push('/')
-          }
+          // 路由守卫统一根据路由模式和 effective_permissions 安装可访问路由。
+          push('/')
         }
       } catch (error: any) {
         errorMessage.value =

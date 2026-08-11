@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Form, FormSchema } from '@/components/Form'
 import { useForm } from '@/hooks/web/useForm'
-import { PropType, reactive, watch } from 'vue'
+import { computed, PropType, reactive, watch } from 'vue'
 import { useValidator } from '@/hooks/web/useValidator'
 import { RoleListItem } from '@/api/role/types'
 
@@ -22,6 +22,20 @@ const rules = reactive({
   roleName: [required()],
   code: [required()]
 })
+
+const effectiveFormSchema = computed(() =>
+  props.formSchema.map((schema) =>
+    schema.field === 'code'
+      ? {
+          ...schema,
+          componentProps: {
+            ...schema.componentProps,
+            disabled: props.currentRow?.isBuiltin === true
+          }
+        }
+      : schema
+  )
+)
 
 const { formRegister, formMethods } = useForm()
 const { setValues, getFormData, getElFormExpose } = formMethods
@@ -55,5 +69,5 @@ defineExpose({
 </script>
 
 <template>
-  <Form :rules="rules" @register="formRegister" :schema="formSchema" />
+  <Form :rules="rules" @register="formRegister" :schema="effectiveFormSchema" />
 </template>

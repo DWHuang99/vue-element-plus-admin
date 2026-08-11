@@ -2,15 +2,14 @@
 import { propTypes } from '@/utils/propTypes'
 import { computed, unref } from 'vue'
 import { useRouter } from 'vue-router'
+import { useUserStore } from '@/store/modules/user'
+import { hasEffectivePermission, isManagementPermission } from '@/utils/accessControl'
 
 const { currentRoute } = useRouter()
+const userStore = useUserStore()
 
 const props = defineProps({
   permission: propTypes.string.def()
-})
-
-const currentPermission = computed(() => {
-  return unref(currentRoute)?.meta?.permission || []
 })
 
 const hasPermission = computed(() => {
@@ -18,7 +17,12 @@ const hasPermission = computed(() => {
   if (!permission) {
     return true
   }
-  return unref(currentPermission).includes(permission)
+
+  if (isManagementPermission(permission)) {
+    return hasEffectivePermission(userStore.getEffectivePermissions, permission)
+  }
+
+  return ((unref(currentRoute)?.meta?.permission || []) as string[]).includes(permission)
 })
 </script>
 

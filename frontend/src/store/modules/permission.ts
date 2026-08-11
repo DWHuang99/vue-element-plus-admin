@@ -1,10 +1,18 @@
 import { defineStore } from 'pinia'
-import { asyncRouterMap, constantRouterMap } from '@/router'
+import {
+  alwaysAvailableRouterMap,
+  authorizationRouterMap,
+  constantRouterMap,
+  demoRouterMap,
+  resetRouter
+} from '@/router'
 import {
   generateRoutesByFrontEnd,
   generateRoutesByServer,
   flatMultiLevelRoutes
 } from '@/utils/routerHelper'
+import { filterRoutesByPermissions } from '@/utils/accessControl'
+import type { ManagementPermission } from '@/api/login/types'
 import { store } from '../index'
 import { cloneDeep } from 'lodash-es'
 
@@ -39,21 +47,29 @@ export const usePermissionStore = defineStore('permission', {
   actions: {
     generateRoutes(
       type: 'server' | 'frontEnd' | 'static',
-      routers?: AppCustomRouteRecordRaw[] | string[]
-    ): Promise<unknown> {
+      routers: AppCustomRouteRecordRaw[] | string[] = [],
+      effectivePermissions: readonly ManagementPermission[] = []
+    ): Promise<void> {
       return new Promise<void>((resolve) => {
-        let routerMap: AppRouteRecordRaw[] = []
+        let demoRoutes: AppRouteRecordRaw[] = []
         if (type === 'server') {
-          // 模拟后端过滤菜单
-          routerMap = generateRoutesByServer(routers as AppCustomRouteRecordRaw[])
+          demoRoutes = generateRoutesByServer(routers as AppCustomRouteRecordRaw[]).filter(
+            (route) => route.path === '/demo'
+          )
         } else if (type === 'frontEnd') {
-          // 模拟前端过滤菜单
-          routerMap = generateRoutesByFrontEnd(cloneDeep(asyncRouterMap), routers as string[])
+          demoRoutes = generateRoutesByFrontEnd(cloneDeep(demoRouterMap), routers as string[])
         } else {
-          // 直接读取静态路由表
-          routerMap = cloneDeep(asyncRouterMap)
+          demoRoutes = cloneDeep(demoRouterMap)
         }
-        // 动态路由，404一定要放到最后面
+
+        const businessRoutes = filterRoutesByPermissions(
+          cloneDeep(authorizationRouterMap),
+          effectivePermissions
+        )
+        const routerMap = demoRoutes
+          .concat(cloneDeep(alwaysAvailableRouterMap))
+          .concat(businessRoutes)
+
         this.addRouters = routerMap.concat([
           {
             path: '/:path(.*)*',
@@ -65,10 +81,16 @@ export const usePermissionStore = defineStore('permission', {
             }
           }
         ])
-        // 渲染菜单的所有路由
         this.routers = cloneDeep(constantRouterMap).concat(routerMap)
         resolve()
       })
+    },
+    resetRoutes(): void {
+      resetRouter()
+      this.routers = []
+      this.addRouters = []
+      this.isAddRouters = false
+      this.menuTabRouters = []
     },
     setIsAddRouters(state: boolean): void {
       this.isAddRouters = state
@@ -76,21 +98,7 @@ export const usePermissionStore = defineStore('permission', {
     setMenuTabRouters(routers: AppRouteRecordRaw[]): void {
       this.menuTabRouters = routers
     }
-  },
-  persist: [
-    {
-      pick: ['routers'],
-      storage: localStorage
-    },
-    {
-      pick: ['addRouters'],
-      storage: localStorage
-    },
-    {
-      pick: ['menuTabRouters'],
-      storage: localStorage
-    }
-  ]
+  }
 })
 
 export const usePermissionStoreWithOut = () => {

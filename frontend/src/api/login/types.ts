@@ -3,8 +3,38 @@ export interface UserLoginType {
   password: string
 }
 
-/** Backend user payload (contracts/auth-api.md). */
+export type ManagementPermission =
+  | 'roles.read'
+  | 'roles.write'
+  | 'departments.read'
+  | 'departments.write'
+  | 'users.read'
+  | 'users.write'
+
+export interface DepartmentProfile {
+  id: number
+  name: string
+}
+
+export interface RoleProfile {
+  id: number
+  name: string
+  code: string
+}
+
+/** Backend user profile returned by GET /api/v1/auth/me. */
 export interface AuthUser {
+  id: number
+  username: string
+  account: string
+  email: string
+  created_at: string
+  department: DepartmentProfile | null
+  roles: RoleProfile[]
+  effective_permissions: ManagementPermission[]
+}
+
+export interface AuthSessionUser {
   id: number
   username: string
   created_at: string
@@ -15,7 +45,7 @@ export interface AuthResult {
   token: string
   token_type: string
   expires_in: number
-  user: AuthUser
+  user: AuthSessionUser
 }
 
 /**

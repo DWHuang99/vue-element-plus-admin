@@ -2,7 +2,7 @@
 import { ContentWrap } from '@/components/ContentWrap'
 import { useI18n } from '@/hooks/web/useI18n'
 import { Table } from '@/components/Table'
-import { ref, unref, nextTick, watch, reactive } from 'vue'
+import { computed, ref, unref, nextTick, watch, reactive } from 'vue'
 import { ElTree, ElInput, ElDivider } from 'element-plus'
 import { getDepartmentApi, getUserByIdApi, saveUserApi, deleteUserByIdApi } from '@/api/department'
 import type { DepartmentItem, DepartmentUserItem } from '@/api/department/types'
@@ -14,8 +14,21 @@ import { Dialog } from '@/components/Dialog'
 import { getRoleListApi } from '@/api/role'
 import { CrudSchema, useCrudSchemas } from '@/hooks/web/useCrudSchemas'
 import { BaseButton } from '@/components/Button'
+import { useUserStore } from '@/store/modules/user'
+import { hasEffectivePermission } from '@/utils/accessControl'
 
 const { t } = useI18n()
+const userStore = useUserStore()
+const canWrite = computed(() =>
+  hasEffectivePermission(userStore.getEffectivePermissions, 'users.write')
+)
+const canReadDepartments = computed(() =>
+  hasEffectivePermission(userStore.getEffectivePermissions, 'departments.read')
+)
+const canReadRoles = computed(() =>
+  hasEffectivePermission(userStore.getEffectivePermissions, 'roles.read')
+)
+const canEdit = computed(() => canWrite.value && canReadDepartments.value && canReadRoles.value)
 
 const { tableRegister, tableState, tableMethods } = useTable({
   fetchDataApi: async () => {
@@ -32,6 +45,8 @@ const { tableRegister, tableState, tableMethods } = useTable({
     }
   },
   fetchDelApi: async () => {
+    // 幂等语义（T060）：同目标集合一次逻辑删除一个 Idempotency-Key；
+    // 删除超时/结果未知后重试复用原 key（后端重放已提交的删除，零重复事件）。
     const res = await deleteUserByIdApi(unref(ids))
     return !!res
   }
@@ -188,15 +203,19 @@ const crudSchemas = reactive<CrudSchema[]>([
           const row = data.row as DepartmentUserItem
           return (
             <>
-              <BaseButton type="primary" onClick={() => action(row, 'edit')}>
-                {t('exampleDemo.edit')}
-              </BaseButton>
+              {unref(canEdit) ? (
+                <BaseButton type="primary" onClick={() => action(row, 'edit')}>
+                  {t('exampleDemo.edit')}
+                </BaseButton>
+              ) : null}
               <BaseButton type="success" onClick={() => action(row, 'detail')}>
                 {t('exampleDemo.detail')}
               </BaseButton>
-              <BaseButton type="danger" onClick={() => delData(row)}>
-                {t('exampleDemo.del')}
-              </BaseButton>
+              {unref(canWrite) ? (
+                <BaseButton type="danger" onClick={() => delData(row)}>
+                  {t('exampleDemo.del')}
+                </BaseButton>
+              ) : null}
             </>
           )
         }
@@ -226,7 +245,9 @@ const fetchDepartment = async () => {
   await nextTick()
   unref(treeEl)?.setCurrentKey(currentNodeKey.value)
 }
-fetchDepartment()
+if (unref(canReadDepartments)) {
+  fetchDepartment()
+}
 
 const currentDepartment = ref('')
 watch(
@@ -279,7 +300,10 @@ const delData = async (row?: DepartmentUserItem) => {
 const action = (row: DepartmentUserItem, type: string) => {
   dialogTitle.value = t(type === 'edit' ? 'exampleDemo.edit' : 'exampleDemo.detail')
   actionType.value = type
-  currentRow.value = { ...row, department: unref(treeEl)?.getCurrentNode() || {} }
+  currentRow.value = {
+    ...row,
+    department: unref(treeEl)?.getCurrentNode() || row.department || {}
+  }
   dialogVisible.value = true
 }
 
@@ -294,6 +318,9 @@ const save = async () => {
     saveLoading.value = true
     try {
       // 编辑时带上当前行 id（表单不含 id 字段），新建时为空 → 创建。
+      // 幂等语义（T060）：一次逻辑提交一个 Idempotency-Key；提交超时/结果未知后
+      // 再次保存且 credential 未改 → 复用原 key（后端续跑原工作流，绝不重复建号）；
+      // 有意修改密码等 credential → 自动换新 key。无需页面改动。
       const res = await saveUserApi({ ...formData, id: unref(currentRow)?.id })
       if (res) {
         currentPage.value = 1
@@ -311,7 +338,7 @@ const save = async () => {
 
 <template>
   <div class="flex w-100% h-100%">
-    <ContentWrap class="w-250px">
+    <ContentWrap v-if="canReadDepartments" class="w-250px">
       <div class="flex justify-center items-center">
         <div class="flex-1">{{ t('userDemo.departmentList') }}</div>
         <ElInput
@@ -353,8 +380,10 @@ const save = async () => {
       />
 
       <div class="mb-10px">
-        <BaseButton type="primary" @click="AddAction">{{ t('exampleDemo.add') }}</BaseButton>
-        <BaseButton :loading="delLoading" type="danger" @click="delData()">
+        <BaseButton v-if="canEdit" type="primary" @click="AddAction">
+          {{ t('exampleDemo.add') }}
+        </BaseButton>
+        <BaseButton v-if="canWrite" :loading="delLoading" type="danger" @click="delData()">
           {{ t('exampleDemo.del') }}
         </BaseButton>
       </div>
@@ -387,7 +416,7 @@ const save = async () => {
 
       <template #footer>
         <BaseButton
-          v-if="actionType !== 'detail'"
+          v-if="actionType !== 'detail' && canEdit"
           type="primary"
           :loading="saveLoading"
           @click="save"

@@ -12,11 +12,13 @@ import {
 } from '@/api/department'
 import type { DepartmentItem } from '@/api/department/types'
 import { useTable } from '@/hooks/web/useTable'
-import { ref, unref, reactive } from 'vue'
+import { computed, ref, unref, reactive } from 'vue'
 import Write from './components/Write.vue'
 import Detail from './components/Detail.vue'
 import { CrudSchema, useCrudSchemas } from '@/hooks/web/useCrudSchemas'
 import { BaseButton } from '@/components/Button'
+import { useUserStore } from '@/store/modules/user'
+import { hasEffectivePermission } from '@/utils/accessControl'
 
 const ids = ref<string[]>([])
 
@@ -48,6 +50,10 @@ const setSearchParams = (params: any) => {
 }
 
 const { t } = useI18n()
+const userStore = useUserStore()
+const canWrite = computed(() =>
+  hasEffectivePermission(userStore.getEffectivePermissions, 'departments.write')
+)
 
 const crudSchemas = reactive<CrudSchema[]>([
   {
@@ -147,15 +153,19 @@ const crudSchemas = reactive<CrudSchema[]>([
         default: (data: any) => {
           return (
             <>
-              <BaseButton type="primary" onClick={() => action(data.row, 'edit')}>
-                {t('exampleDemo.edit')}
-              </BaseButton>
+              {unref(canWrite) ? (
+                <BaseButton type="primary" onClick={() => action(data.row, 'edit')}>
+                  {t('exampleDemo.edit')}
+                </BaseButton>
+              ) : null}
               <BaseButton type="success" onClick={() => action(data.row, 'detail')}>
                 {t('exampleDemo.detail')}
               </BaseButton>
-              <BaseButton type="danger" onClick={() => delData(data.row)}>
-                {t('exampleDemo.del')}
-              </BaseButton>
+              {unref(canWrite) ? (
+                <BaseButton type="danger" onClick={() => delData(data.row)}>
+                  {t('exampleDemo.del')}
+                </BaseButton>
+              ) : null}
             </>
           )
         }
@@ -229,8 +239,10 @@ const save = async () => {
     <Search :schema="allSchemas.searchSchema" @search="setSearchParams" @reset="setSearchParams" />
 
     <div class="mb-10px">
-      <BaseButton type="primary" @click="AddAction">{{ t('exampleDemo.add') }}</BaseButton>
-      <BaseButton :loading="delLoading" type="danger" @click="delData(null)">
+      <BaseButton v-if="canWrite" type="primary" @click="AddAction">
+        {{ t('exampleDemo.add') }}
+      </BaseButton>
+      <BaseButton v-if="canWrite" :loading="delLoading" type="danger" @click="delData(null)">
         {{ t('exampleDemo.del') }}
       </BaseButton>
     </div>
@@ -264,7 +276,7 @@ const save = async () => {
 
     <template #footer>
       <BaseButton
-        v-if="actionType !== 'detail'"
+        v-if="actionType !== 'detail' && canWrite"
         type="primary"
         :loading="saveLoading"
         @click="save"

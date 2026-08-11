@@ -2,7 +2,6 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 import type { RouteRecordRaw } from 'vue-router'
 import type { App } from 'vue'
 import { Layout, getParentLayout } from '@/utils/routerHelper'
-import { NO_RESET_WHITE_LIST } from '@/constants'
 
 export const constantRouterMap: AppRouteRecordRaw[] = [
   {
@@ -852,7 +851,8 @@ export const asyncRouterMap: AppRouteRecordRaw[] = [
         component: () => import('@/views/Authorization/Department/Department.vue'),
         name: 'Department',
         meta: {
-          title: 'router.department'
+          title: 'router.department',
+          requiredPermission: 'departments.read'
         }
       },
       {
@@ -860,7 +860,8 @@ export const asyncRouterMap: AppRouteRecordRaw[] = [
         component: () => import('@/views/Authorization/User/User.vue'),
         name: 'User',
         meta: {
-          title: 'router.user'
+          title: 'router.user',
+          requiredPermission: 'users.read'
         }
       },
       {
@@ -868,12 +869,21 @@ export const asyncRouterMap: AppRouteRecordRaw[] = [
         component: () => import('@/views/Authorization/Role/Role.vue'),
         name: 'Role',
         meta: {
-          title: 'router.role'
+          title: 'router.role',
+          requiredPermission: 'roles.read'
         }
       }
     ]
   }
 ]
+
+export const demoRouterMap = asyncRouterMap.filter((route) => route.path === '/demo')
+export const alwaysAvailableRouterMap = asyncRouterMap.filter(
+  (route) => route.path === '/external-link'
+)
+export const authorizationRouterMap = asyncRouterMap.filter(
+  (route) => route.path === '/authorization'
+)
 
 const router = createRouter({
   history: createWebHashHistory(),
@@ -882,11 +892,25 @@ const router = createRouter({
   scrollBehavior: () => ({ left: 0, top: 0 })
 })
 
+const collectRouteNames = (routes: AppRouteRecordRaw[]): Set<string> => {
+  const names = new Set<string>()
+  const visit = (items: AppRouteRecordRaw[]) => {
+    items.forEach((route) => {
+      route.name && names.add(route.name)
+      route.children && visit(route.children)
+    })
+  }
+  visit(routes)
+  return names
+}
+
+const constantRouteNames = collectRouteNames(constantRouterMap)
+
 export const resetRouter = (): void => {
   router.getRoutes().forEach((route) => {
-    const { name } = route
-    if (name && !NO_RESET_WHITE_LIST.includes(name as string)) {
-      router.hasRoute(name) && router.removeRoute(name)
+    const name = route.name as string | undefined
+    if (name && !constantRouteNames.has(name) && router.hasRoute(name)) {
+      router.removeRoute(name)
     }
   })
 }
