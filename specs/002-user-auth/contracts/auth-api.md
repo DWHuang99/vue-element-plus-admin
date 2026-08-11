@@ -1,8 +1,8 @@
 # Auth API Contract
 
 **Feature**: 002-user-auth
-**Date**: 2026-08-05
-**Version**: 1.0.0
+**Date**: 2026-08-10
+**Version**: 1.1.0
 
 ## Overview
 
@@ -35,6 +35,7 @@ http://{host}:{port}/api/v1
 | `AUTH_INVALID_CREDENTIALS` | 401 | 登录凭据错误（统一响应，防枚举） |
 | `AUTH_USERNAME_TAKEN` | 409 | 用户名已被占用 |
 | `AUTH_INVALID_TOKEN` | 401 | 令牌缺失/无效/过期/已撤销 |
+| `AUTH_FORBIDDEN` | 403 | 已认证，但缺少管理端点要求的权限 |
 | `AUTH_INVALID_INPUT` | 400 | 请求字段校验失败（含 `field_errors`） |
 | `RATE_LIMITED` | 429 | 触发速率限制（含 `Retry-After` 头） |
 
@@ -146,16 +147,21 @@ Authorization: Bearer <token>
 ```
 无请求体。
 
-**Response — 204 No Content**
+**Response — 200 OK**
+```json
+{"data": {}}
+```
+
+写接口必须返回非空 JSON 信封；前端响应拦截器不接受空 body 的 2xx。
 
 **Errors**
 
 | 错误码 | HTTP | 说明 |
 |--------|------|------|
 | `AUTH_INVALID_TOKEN` | 401 | 仅当请求缺少 `Authorization` 头，或头格式错误（非 `Bearer <token>`）时返回 |
-| — | 204 | 头格式正确但令牌本身无效/过期/已撤销时，**仍返回 204**（幂等撤销，不暴露令牌状态） |
+| — | 200 | 头格式正确但令牌本身无效/过期/已撤销时，**仍返回成功**（幂等撤销，不暴露令牌状态） |
 
-> **语义澄清**：缺失/畸形头 → 401（协议层错误）；有效格式的无效令牌 → 204（业务层幂等）。
+> **语义澄清**：缺失/畸形头 → 401（协议层错误）；有效格式的无效令牌 → `200 {"data":{}}`（业务层幂等）。
 > 客户端不应通过 logout 响应判断令牌有效性，应使用 `/auth/me`。
 
 ---
@@ -176,11 +182,27 @@ Authorization: Bearer <token>
     "user": {
       "id": 1,
       "username": "alice",
-      "created_at": "2026-08-05T10:00:00Z"
+      "account": "Alice",
+      "email": "alice@example.com",
+      "created_at": "2026-08-05T10:00:00Z",
+      "department": {"id": 1, "name": "研发部"},
+      "roles": [
+        {"id": 2, "name": "管理员", "code": "admin"}
+      ],
+      "effective_permissions": [
+        "departments.read",
+        "departments.write",
+        "roles.read",
+        "roles.write",
+        "users.read",
+        "users.write"
+      ]
     }
   }
 }
 ```
+
+`effective_permissions` 是用户所有角色权限的去重、有序并集；没有权限时返回 `[]`，不返回 `null`。前端以该字段作为真实管理菜单和按钮权限的唯一来源。
 
 **Errors**
 
@@ -216,7 +238,7 @@ Authorization: Bearer <token>
    响应体结构一致
 6. **me 有效**: 携带登录令牌 GET /auth/me → 200, data.user.username="alice"
 7. **me 无效令牌**: 伪造令牌 / 过期令牌 / 已撤销令牌 → 均 401 `AUTH_INVALID_TOKEN`
-8. **退出生效**: POST /auth/logout（携带令牌）→ 204; 随后 GET /auth/me 用同令牌 → 401
+8. **退出生效**: POST /auth/logout（携带令牌）→ `200 {"data":{}}`; 随后 GET /auth/me 用同令牌 → 401
 9. **限流**: 超过登录限制后 → 429 `RATE_LIMITED`, 含 `Retry-After`
 10. **秘密泄露**: 所有响应字符串匹配 password/token(原始值)/secret/stack → 零命中
 11. **性能**: 100 次登录采样 P95 < 400ms（Argon2id m=64MB 单次哈希典型耗时 100–300ms；
@@ -226,7 +248,7 @@ Authorization: Bearer <token>
 
 ## Versioning
 
-本契约采用语义化版本。当前版本 1.0.0。
+本契约采用语义化版本。当前版本 1.1.0。
 
 - **向后兼容**: 不修改已有字段/错误码/状态码的前提下添加字段或端点
 - **破坏性变更**: 必须提供版本化端点（如 `/v2/auth/login`）或经批准的同步迁移方案

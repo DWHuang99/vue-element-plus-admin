@@ -1,8 +1,9 @@
 # RBAC API Contract: 权限管理第一阶段
 
 **Feature**: 003-rbac-permission-management
-**Date**: 2026-08-07
-**Base**: `/api/v1`（管理接口均需 `Authorization: Bearer <token>`，经 `middleware.Auth` 校验）
+**Date**: 2026-08-10
+**Version**: 1.1.0
+**Base**: `/api/v1`（管理接口均需 `Authorization: Bearer <token>`，依次经过身份认证与权限校验）
 
 ## 通用约定
 
@@ -12,6 +13,21 @@
 - **所有写接口返回 JSON body（`200 {"data":{}}`），绝不返回 204** —— 前端响应拦截器对空 body 的 2xx 会误弹"请求失败"
 - 校验失败统一 `400 AUTH_INVALID_INPUT`（含 `field_errors`）
 - 未带/无效令牌 → `401 AUTH_INVALID_TOKEN`
+- 已认证但缺少端点要求的权限 → `403 AUTH_FORBIDDEN`；前端不得因此清除登录态
+
+### 权限矩阵
+
+| 权限码 | 端点 |
+|--------|------|
+| `roles.read` | `GET /roles` |
+| `roles.write` | `POST /roles`、`POST /roles/delete` |
+| `departments.read` | `GET /departments` |
+| `departments.write` | `POST /departments`、`POST /departments/delete` |
+| `users.read` | `GET /users` |
+| `users.write` | `POST /users`、`POST /users/delete` |
+
+有效权限为用户所有角色授权的去重、有序并集，每次请求实时查询数据库，不缓存授权决定。
+第一代策略中 `admin` 与 `super_admin` 均拥有以上 6 个权限；`user` 与新建自定义角色默认均不拥有管理权限。
 
 ---
 
@@ -26,7 +42,7 @@
 {
   "data": {
     "list": [
-      {"id": 1, "name": "超级管理员", "code": "super_admin", "created_at": "2026-08-07T03:00:00Z"}
+      {"id": 1, "name": "超级管理员", "code": "super_admin", "is_builtin": true, "created_at": "2026-08-07T03:00:00Z"}
     ],
     "total": 3
   }
@@ -55,6 +71,7 @@
 - `400 AUTH_INVALID_INPUT` — `name`/`code` 缺失或格式非法（`field_errors`）
 - `409 NAME_TAKEN` — `name` 或 `code` 已被占用
 - `404 ROLE_NOT_FOUND` — 更新时 `id` 不存在
+- `409 BUILTIN_ROLE_CODE_IMMUTABLE` — 尝试修改 `super_admin`、`admin` 或 `user` 的稳定角色码
 
 ### POST `/roles/delete` — 批量删除角色
 
@@ -72,6 +89,7 @@
 - `400 AUTH_INVALID_INPUT` — `ids` 为空或含非法值
 - `400` — 角色仍被用户引用（`field_errors.ids`：先解除用户角色关联）
 - `404 ROLE_NOT_FOUND` — 含不存在的角色 id
+- `409 BUILTIN_ROLE_DELETE_PROTECTED` — 请求包含 `super_admin`、`admin` 或 `user` 内置角色
 
 ---
 
@@ -245,17 +263,39 @@
       "department": {"id": 1, "name": "研发部"},
       "roles": [
         {"id": 1, "name": "超级管理员", "code": "super_admin"}
+      ],
+      "effective_permissions": [
+        "departments.read",
+        "departments.write",
+        "roles.read",
+        "roles.write",
+        "users.read",
+        "users.write"
       ]
     }
   }
 }
 ```
 
-> 新注册用户经 `auth.Register` 默认写入角色 `user`，`roles` 恒非空。
+> 新注册用户经 `auth.Register` 默认写入角色 `user`，`roles` 恒非空。`effective_permissions` 是所有角色权限的去重、有序并集；无权限时固定返回 `[]`。
 
-### POST `/auth/logout` — 退出（契约修正）
+### POST `/auth/logout` — 退出
 
-现返回 `204`（空 body）→ 改为 `200 {"data":{}}`，避免前端拦截器误报"请求失败"。
+返回 `200 {"data":{}}`，避免前端拦截器将空 body 的 2xx 误判为失败。
+
+---
+
+## 首个管理员初始化
+
+系统不提供默认 `admin/admin`，也不通过该流程创建用户或设置密码。目标用户必须先通过正常注册流程存在。
+
+首选一次性 CLI（从 `backend/` 执行）：
+
+```bash
+DATABASE_URL='postgres://...' go run ./cmd/admin-init --username alice --role admin
+```
+
+`--role` 仅允许 `admin` 或 `super_admin`；命令幂等添加角色，并保留用户现有角色。受控 SQL 备选方案见 `backend/docs/operations/admin-init.md`。
 
 ---
 
@@ -265,7 +305,11 @@
 |--------|------|------|
 | `AUTH_INVALID_INPUT` | 400 | 请求校验失败（含 `field_errors`） |
 | `AUTH_INVALID_TOKEN` | 401 | 未带/无效/过期/已撤销令牌 |
+| `AUTH_FORBIDDEN` | 403 | 已认证，但缺少端点要求的权限 |
 | `ROLE_NOT_FOUND` | 404 | 角色 id 不存在 |
 | `DEPARTMENT_NOT_FOUND` | 404 | 部门 id 不存在 |
 | `USER_NOT_FOUND` | 404 | 用户 id 不存在 |
 | `NAME_TAKEN` | 409 | 角色名/角色码/部门名/用户名重复 |
+| `BUILTIN_ROLE_CODE_IMMUTABLE` | 409 | 尝试修改内置角色码 |
+| `BUILTIN_ROLE_DELETE_PROTECTED` | 409 | 尝试删除内置角色 |
+| `DELETE_PROTECTED` | 400 | 存在引用关系，暂不可删除 |

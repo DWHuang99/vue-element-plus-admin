@@ -1,0 +1,3338 @@
+diff --git a/backend/README.md b/backend/README.md
+index f7584d9..3f5f591 100644
+--- a/backend/README.md
++++ b/backend/README.md
+@@ -68,16 +68,16 @@ curl http://localhost:8080/health/ready
+ | POST | `/api/v1/auth/register` | 注册（注册即登录，返回会话令牌） |
+ | POST | `/api/v1/auth/login` | 登录（返回会话令牌 + 用户信息） |
+ | POST | `/api/v1/auth/logout` | 退出（撤销当前会话，幂等） |
+-| GET | `/api/v1/auth/me` | 当前用户信息（需 Bearer 令牌） |
+-| GET | `/api/v1/roles` | 角色列表（需 Bearer 令牌） |
+-| POST | `/api/v1/roles` | 新建/编辑角色，`{id?, name, code}`（需 Bearer 令牌） |
+-| POST | `/api/v1/roles/delete` | 批量删除角色，`{ids: number[]}`（需 Bearer 令牌） |
+-| GET | `/api/v1/departments` | 部门树（需 Bearer 令牌） |
+-| POST | `/api/v1/departments` | 新建/编辑部门，`{id?, name, parent_id?}`（需 Bearer 令牌） |
+-| POST | `/api/v1/departments/delete` | 批量删除部门，`{ids: number[]}`（需 Bearer 令牌） |
+-| GET | `/api/v1/users` | 用户分页列表，`?id&keyword&page_index&page_size`（需 Bearer 令牌） |
+-| POST | `/api/v1/users` | 新建/编辑用户，`{id?, username, account, password?, email?, department_id?}`（需 Bearer 令牌） |
+-| POST | `/api/v1/users/delete` | 批量删除用户，`{ids: number[]}`（需 Bearer 令牌） |
++| GET | `/api/v1/auth/me` | 当前用户、角色、部门与有效权限（需 Bearer 令牌） |
++| GET | `/api/v1/roles` | 角色列表（需 `roles.read`） |
++| POST | `/api/v1/roles` | 新建/编辑角色，`{id?, name, code}`（需 `roles.write`） |
++| POST | `/api/v1/roles/delete` | 批量删除角色，`{ids: number[]}`（需 `roles.write`） |
++| GET | `/api/v1/departments` | 部门树（需 `departments.read`） |
++| POST | `/api/v1/departments` | 新建/编辑部门，`{id?, name, parent_id?}`（需 `departments.write`） |
++| POST | `/api/v1/departments/delete` | 批量删除部门，`{ids: number[]}`（需 `departments.write`） |
++| GET | `/api/v1/users` | 用户分页列表，`?department_id&username&account&page_index&page_size`（需 `users.read`） |
++| POST | `/api/v1/users` | 新建/编辑用户，`{id?, username, account, password?, email?, department_id?, roles}`（需 `users.write`） |
++| POST | `/api/v1/users/delete` | 批量删除用户，`{ids: number[]}`（需 `users.write`） |
+ 
+ 健康检查契约见 [Health Check API 契约](../specs/001-backend-scaffold/contracts/health-api.md)；
+ 认证契约见 [Auth API 契约](../specs/002-user-auth/contracts/auth-api.md)；
+@@ -85,16 +85,31 @@ RBAC 管理接口契约见 [RBAC API 契约](../specs/003-rbac-permission-manage
+ 
+ ### 管理接口约定
+ 
+-- **鉴权**：除 `/api/v1/auth/*`（register/login/logout）外，所有 `/api/v1/*` 接口均需携带 `Authorization: Bearer <token>`。
++- **认证**：管理接口均需携带 `Authorization: Bearer <token>`；令牌缺失或无效返回 `401 AUTH_INVALID_TOKEN`。
++- **授权**：9 个管理端点按 `roles.*`、`departments.*`、`users.*` 的 read/write 权限实时校验；无权限返回 `403 AUTH_FORBIDDEN`，不会清除登录态。
++- **第一代内置策略**：`admin` 和 `super_admin` 同时拥有全部 6 个管理权限；`user` 与自定义角色默认无管理权限。
+ - **写接口（POST）统一返回 `200 {"data":{}}`**，不返回 204 空响应体——前端 axios 拦截器依赖非空 `data` 判定成功。
+ - **错误统一封装**：`{"error":{"code","message","field_errors"}}`，字段校验失败时 `field_errors` 携带 `{field, code, message}` 列表。
+ - **编辑与新建共用一个写接口**：请求体带 `id` 即更新，缺省 `id` 即创建（角色/部门/用户一致）。
++- **内置角色保护**：`super_admin`、`admin`、`user` 的角色码不可修改，角色不可删除。
++
++### 初始化首个管理员
++
++系统不提供默认 `admin/admin`。先正常注册用户，再从 `backend/` 运行一次性 CLI：
++
++```bash
++DATABASE_URL='postgres://...' go run ./cmd/admin-init --username alice --role admin
++```
++
++`--role` 只接受 `admin` 或 `super_admin`；命令不会接收或设置密码，并且可以安全重复执行。受控 SQL 备选步骤见 [管理员初始化运维文档](docs/operations/admin-init.md)。
+ 
+ ## 项目结构
+ 
+ ```
+ backend/
+-├── cmd/server/main.go          # 应用入口
++├── cmd/
++│   ├── server/main.go          # 应用入口
++│   └── admin-init/main.go      # 已注册用户管理员角色初始化 CLI
+ ├── internal/
+ │   ├── auth/                   # 认证服务层（注册/登录/退出/令牌）
+ │   │   ├── service.go          # 业务逻辑（服务层）
+@@ -102,6 +117,7 @@ backend/
+ │   │   ├── token.go            # 会话令牌生成/哈希/生命周期
+ │   │   ├── handler.go          # Gin HTTP 适配器
+ │   │   └── errors.go           # 哨兵错误（契约错误码映射）
++│   ├── authorization/           # 数据库实时有效权限与授权检查
+ │   ├── config/config.go         # 配置加载与校验
+ │   ├── rbac/                    # RBAC 管理服务层（角色/部门/用户）
+ │   ├── database/
+@@ -112,6 +128,7 @@ backend/
+ │   ├── logging/logger.go        # 结构化日志
+ │   ├── middleware/
+ │   │   ├── auth.go              # Bearer 令牌认证中间件
++│   │   ├── authorization.go     # 管理端点权限中间件
+ │   │   ├── request_id.go        # 请求 ID 中间件
+ │   │   └── cors.go              # 跨域中间件
+ │   ├── ratelimit/               # 内存滑动窗口限流
+diff --git a/backend/cmd/server/main.go b/backend/cmd/server/main.go
+index 249d429..116f0b8 100644
+--- a/backend/cmd/server/main.go
++++ b/backend/cmd/server/main.go
+@@ -9,6 +9,7 @@ import (
+ 	"time"
+ 
+ 	"github.com/hdw/vue-element-plus-admin/backend/internal/auth"
++	"github.com/hdw/vue-element-plus-admin/backend/internal/authorization"
+ 	"github.com/hdw/vue-element-plus-admin/backend/internal/config"
+ 	"github.com/hdw/vue-element-plus-admin/backend/internal/database"
+ 	"github.com/hdw/vue-element-plus-admin/backend/internal/health"
+@@ -86,7 +87,8 @@ func main() {
+ 	router.GET("/health/ready", healthHandler.Ready)
+ 
+ 	// 6b. Auth routes under /api/v1/auth
+-	authSvc := auth.NewAuthService(db.Pool)
++	authorizationSvc := authorization.NewService(db.Pool)
++	authSvc := auth.NewAuthServiceWithAuthorization(db.Pool, authorizationSvc)
+ 	authHandler := auth.NewHandler(authSvc, logger)
+ 
+ 	// Rate limiters (config-controlled; disabled when RATE_LIMIT_ENABLED=false).
+@@ -128,17 +130,7 @@ func main() {
+ 
+ 	rbacGroup := router.Group("/api/v1")
+ 	rbacGroup.Use(middleware.Auth(authSvc))
+-	{
+-		rbacGroup.GET("/roles", rbacHandler.ListRoles)
+-		rbacGroup.POST("/roles", rbacHandler.SaveRole)
+-		rbacGroup.POST("/roles/delete", rbacHandler.DeleteRoles)
+-		rbacGroup.GET("/departments", rbacHandler.ListDepartments)
+-		rbacGroup.POST("/departments", rbacHandler.SaveDepartment)
+-		rbacGroup.POST("/departments/delete", rbacHandler.DeleteDepartments)
+-		rbacGroup.GET("/users", rbacHandler.ListUsers)
+-		rbacGroup.POST("/users", rbacHandler.SaveUser)
+-		rbacGroup.POST("/users/delete", rbacHandler.DeleteUsers)
+-	}
++	rbac.RegisterRoutes(rbacGroup, rbacHandler, authorizationSvc)
+ 
+ 	// 7. Start server (blocking call in goroutine)
+ 	go func() {
+diff --git a/backend/internal/auth/handler.go b/backend/internal/auth/handler.go
+index 7d08710..33ebe8c 100644
+--- a/backend/internal/auth/handler.go
++++ b/backend/internal/auth/handler.go
+@@ -136,6 +136,9 @@ func (h *Handler) Me(c *gin.Context) {
+ 		c.JSON(http.StatusInternalServerError, newErrorEnvelope("INTERNAL_ERROR", "内部错误", nil))
+ 		return
+ 	}
++	if profile.EffectivePermissions == nil {
++		profile.EffectivePermissions = []string{}
++	}
+ 
+ 	c.JSON(http.StatusOK, gin.H{"data": gin.H{"user": profile}})
+ }
+diff --git a/backend/internal/auth/handler_test.go b/backend/internal/auth/handler_test.go
+index aa275c2..7181844 100644
+--- a/backend/internal/auth/handler_test.go
++++ b/backend/internal/auth/handler_test.go
+@@ -345,13 +345,16 @@ func TestHandler_Me(t *testing.T) {
+ 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+ 	var data struct {
+ 		User struct {
+-			ID       int64  `json:"id"`
+-			Username string `json:"username"`
++			ID                   int64    `json:"id"`
++			Username             string   `json:"username"`
++			EffectivePermissions []string `json:"effective_permissions"`
+ 		} `json:"user"`
+ 	}
+ 	require.NoError(t, json.Unmarshal(body["data"], &data))
+ 	assert.Equal(t, int64(7), data.User.ID)
+ 	assert.Equal(t, "alice", data.User.Username)
++	require.NotNil(t, data.User.EffectivePermissions)
++	assert.Empty(t, data.User.EffectivePermissions)
+ }
+ 
+ // TestHandler_MeReturnsRolesAndDepartment: the US3 /auth/me extension must
+@@ -370,6 +373,7 @@ func TestHandler_MeReturnsRolesAndDepartment(t *testing.T) {
+ 					{ID: 3, Name: "普通用户", Code: "user"},
+ 					{ID: 2, Name: "管理员", Code: "admin"},
+ 				},
++				EffectivePermissions: []string{"departments.read", "roles.read", "users.read"},
+ 			}, nil
+ 		},
+ 	})
+@@ -400,6 +404,7 @@ func TestHandler_MeReturnsRolesAndDepartment(t *testing.T) {
+ 				Name string `json:"name"`
+ 				Code string `json:"code"`
+ 			} `json:"roles"`
++			EffectivePermissions []string `json:"effective_permissions"`
+ 		} `json:"user"`
+ 	}
+ 	require.NoError(t, json.Unmarshal(body["data"], &data))
+@@ -410,6 +415,7 @@ func TestHandler_MeReturnsRolesAndDepartment(t *testing.T) {
+ 	require.Len(t, data.User.Roles, 2)
+ 	assert.Equal(t, "user", data.User.Roles[0].Code)
+ 	assert.Equal(t, "admin", data.User.Roles[1].Code)
++	assert.Equal(t, []string{"departments.read", "roles.read", "users.read"}, data.User.EffectivePermissions)
+ }
+ 
+ func TestHandler_MeMissingPrincipalReturns401(t *testing.T) {
+diff --git a/backend/internal/auth/service.go b/backend/internal/auth/service.go
+index 7a80464..bebe245 100644
+--- a/backend/internal/auth/service.go
++++ b/backend/internal/auth/service.go
+@@ -11,6 +11,7 @@ import (
+ 	"github.com/jackc/pgx/v5/pgtype"
+ 	"github.com/jackc/pgx/v5/pgxpool"
+ 
++	"github.com/hdw/vue-element-plus-admin/backend/internal/authorization"
+ 	"github.com/hdw/vue-element-plus-admin/backend/internal/database/sqlc"
+ )
+ 
+@@ -50,13 +51,14 @@ type RoleProfile struct {
+ 
+ // UserProfile is the extended /auth/me payload: user + department + roles.
+ type UserProfile struct {
+-	ID         int64              `json:"id"`
+-	Username   string             `json:"username"`
+-	Account    string             `json:"account"`
+-	Email      string             `json:"email"`
+-	CreatedAt  time.Time          `json:"created_at"`
+-	Department *DepartmentProfile `json:"department"`
+-	Roles      []RoleProfile      `json:"roles"`
++	ID                   int64              `json:"id"`
++	Username             string             `json:"username"`
++	Account              string             `json:"account"`
++	Email                string             `json:"email"`
++	CreatedAt            time.Time          `json:"created_at"`
++	Department           *DepartmentProfile `json:"department"`
++	Roles                []RoleProfile      `json:"roles"`
++	EffectivePermissions []string           `json:"effective_permissions"`
+ }
+ 
+ // Service is the auth business logic boundary (independent, testable service layer).
+@@ -70,8 +72,9 @@ type Service interface {
+ 
+ // AuthService implements Service against PostgreSQL via sqlc.
+ type AuthService struct {
+-	pool *pgxpool.Pool
+-	q    sqlc.Querier
++	pool          *pgxpool.Pool
++	q             sqlc.Querier
++	authorization authorization.Service
+ }
+ 
+ // dummyHash is used to burn a comparable amount of work when a login targets
+@@ -84,10 +87,15 @@ var dummyHash = func() string {
+ 	return h
+ }()
+ 
+-// NewAuthService creates an AuthService.
+-// q may be nil; when nil, the pool is used to derive queries per call.
++// NewAuthService creates an AuthService with database-backed authorization.
+ func NewAuthService(pool *pgxpool.Pool) *AuthService {
+-	return &AuthService{pool: pool, q: sqlc.New(pool)}
++	return NewAuthServiceWithAuthorization(pool, authorization.NewService(pool))
++}
++
++// NewAuthServiceWithAuthorization creates an AuthService using the supplied
++// authorization service. Server wiring uses this to share one authorization boundary.
++func NewAuthServiceWithAuthorization(pool *pgxpool.Pool, authorizationSvc authorization.Service) *AuthService {
++	return &AuthService{pool: pool, q: sqlc.New(pool), authorization: authorizationSvc}
+ }
+ 
+ // Register creates a new user and a session in a single transaction, then
+@@ -295,6 +303,12 @@ func (s *AuthService) GetUserProfile(ctx context.Context, userID int64) (*UserPr
+ 	for _, r := range roles {
+ 		profile.Roles = append(profile.Roles, RoleProfile{ID: r.ID, Name: r.Name, Code: r.Code})
+ 	}
++
++	permissions, err := s.authorization.EffectivePermissions(ctx, u.ID)
++	if err != nil {
++		return nil, fmt.Errorf("get effective permissions: %w", err)
++	}
++	profile.EffectivePermissions = permissions
+ 	return profile, nil
+ }
+ 
+diff --git a/backend/internal/auth/service_test.go b/backend/internal/auth/service_test.go
+index e39c6f6..8675abd 100644
+--- a/backend/internal/auth/service_test.go
++++ b/backend/internal/auth/service_test.go
+@@ -15,6 +15,7 @@ import (
+ 	"github.com/testcontainers/testcontainers-go/modules/postgres"
+ 	"github.com/testcontainers/testcontainers-go/wait"
+ 
++	"github.com/hdw/vue-element-plus-admin/backend/internal/authorization"
+ 	"github.com/hdw/vue-element-plus-admin/backend/internal/database"
+ 	"github.com/hdw/vue-element-plus-admin/backend/internal/database/sqlc"
+ )
+@@ -164,6 +165,8 @@ func TestService_GetUserProfile(t *testing.T) {
+ 	assert.Nil(t, profile.Department, "freshly registered user has no department")
+ 	require.Len(t, profile.Roles, 1)
+ 	assert.Equal(t, "user", profile.Roles[0].Code)
++	require.NotNil(t, profile.EffectivePermissions)
++	assert.Empty(t, profile.EffectivePermissions, "the default user role has no permissions")
+ 
+ 	// Assign a department and verify it is surfaced. Resolve the seeded 研发部
+ 	// id dynamically via SQL to avoid coupling to seed row ids.
+@@ -181,6 +184,30 @@ func TestService_GetUserProfile(t *testing.T) {
+ 	assert.Equal(t, "研发部", profile.Department.Name)
+ }
+ 
++func TestService_GetUserProfileIncludesEffectivePermissions(t *testing.T) {
++	username := uniqueUsername()
++	res, _ := mustRegister(t, username, "supersecret123")
++
++	q := sqlc.New(testSvc.pool)
++	adminRole, err := q.GetRoleByCode(testCtx, "admin")
++	require.NoError(t, err)
++	require.NoError(t, q.InsertUserRole(testCtx, sqlc.InsertUserRoleParams{
++		UserID: res.User.ID,
++		RoleID: adminRole.ID,
++	}))
++
++	profile, err := testSvc.GetUserProfile(testCtx, res.User.ID)
++	require.NoError(t, err)
++	assert.Equal(t, []string{
++		authorization.DepartmentsRead,
++		authorization.DepartmentsWrite,
++		authorization.RolesRead,
++		authorization.RolesWrite,
++		authorization.UsersRead,
++		authorization.UsersWrite,
++	}, profile.EffectivePermissions)
++}
++
+ // T025: Login issues a session and fails uniformly for wrong password vs missing user.
+ func TestService_LoginSuccess(t *testing.T) {
+ 	username := uniqueUsername()
+diff --git a/backend/internal/database/rbac_migration_test.go b/backend/internal/database/rbac_migration_test.go
+index aee31d9..9f5cca7 100644
+--- a/backend/internal/database/rbac_migration_test.go
++++ b/backend/internal/database/rbac_migration_test.go
+@@ -84,7 +84,7 @@ func swapDB(dbname string) string {
+ 
+ func TestRBAC_TablesCreated(t *testing.T) {
+ 	ctx := context.Background()
+-	for _, table := range []string{"departments", "roles", "user_roles"} {
++	for _, table := range []string{"departments", "roles", "user_roles", "permissions", "role_permissions"} {
+ 		var exists bool
+ 		err := testConn.QueryRow(ctx,
+ 			"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1)",
+@@ -128,6 +128,56 @@ func TestRBAC_SeedData(t *testing.T) {
+ 	assert.Equal(t, 2, children, "研发部 should have 前端组 and 后端组 children")
+ }
+ 
++func TestPermissions_SeedData(t *testing.T) {
++	ctx := context.Background()
++	expected := []string{
++		"departments.read",
++		"departments.write",
++		"roles.read",
++		"roles.write",
++		"users.read",
++		"users.write",
++	}
++
++	rows, err := testConn.Query(ctx, `SELECT code FROM permissions ORDER BY code`)
++	require.NoError(t, err)
++	defer rows.Close()
++	var codes []string
++	for rows.Next() {
++		var code string
++		require.NoError(t, rows.Scan(&code))
++		codes = append(codes, code)
++	}
++	require.NoError(t, rows.Err())
++	assert.Equal(t, expected, codes)
++
++	for _, roleCode := range []string{"admin", "super_admin"} {
++		var count int
++		require.NoError(t, testConn.QueryRow(ctx, `
++			SELECT count(*)
++			FROM role_permissions rp
++			JOIN roles r ON r.id = rp.role_id
++			WHERE r.code = $1`, roleCode).Scan(&count))
++		assert.Equal(t, 6, count, "role %s should receive all permissions", roleCode)
++	}
++
++	var userCount int
++	require.NoError(t, testConn.QueryRow(ctx, `
++		SELECT count(*)
++		FROM role_permissions rp
++		JOIN roles r ON r.id = rp.role_id
++		WHERE r.code = 'user'`).Scan(&userCount))
++	assert.Zero(t, userCount, "the built-in user role should have no permissions")
++
++	var customRoleID int64
++	require.NoError(t, testConn.QueryRow(ctx,
++		`INSERT INTO roles (name, code) VALUES ('迁移测试自定义角色', 'migration_custom') RETURNING id`).Scan(&customRoleID))
++	var customCount int
++	require.NoError(t, testConn.QueryRow(ctx,
++		`SELECT count(*) FROM role_permissions WHERE role_id = $1`, customRoleID).Scan(&customCount))
++	assert.Zero(t, customCount, "new custom roles should not receive implicit permissions")
++}
++
+ func TestRBAC_UniqueConstraints(t *testing.T) {
+ 	ctx := context.Background()
+ 
+@@ -189,10 +239,70 @@ func TestRBAC_CascadeDeleteUser(t *testing.T) {
+ 	assert.Zero(t, n, "user_roles row must cascade-delete with user")
+ }
+ 
++// TestPermissionsMigrationUpAndDown verifies 000005 applies cleanly and its
++// rollback removes only permission tables while preserving the RBAC schema.
++func TestPermissionsMigrationUpAndDown(t *testing.T) {
++	ctx := context.Background()
++
++	_, err := testConn.Exec(ctx, `CREATE DATABASE scaffold_permissions_migration`)
++	require.NoError(t, err)
++	defer func() {
++		_, _ = testConn.Exec(ctx, `DROP DATABASE scaffold_permissions_migration WITH (FORCE)`)
++	}()
++
++	databaseURL := swapDB("scaffold_permissions_migration")
++	src, err := iofs.New(migrations.FS, ".")
++	require.NoError(t, err)
++	migrator, err := migrate.NewWithSourceInstance("iofs", src, databaseURL)
++	require.NoError(t, err)
++	defer migrator.Close()
++
++	require.NoError(t, migrator.Migrate(4))
++
++	conn, err := pgx.Connect(ctx, databaseURL)
++	require.NoError(t, err)
++	defer conn.Close(ctx)
++
++	// Simulate a legitimate pre-authorization installation where mutable seeded
++	// roles were renamed or deleted. 000005 must restore canonical identities.
++	_, err = conn.Exec(ctx, `UPDATE roles SET code = 'legacy_admin' WHERE code = 'admin'`)
++	require.NoError(t, err)
++	_, err = conn.Exec(ctx, `DELETE FROM roles WHERE code = 'super_admin'`)
++	require.NoError(t, err)
++
++	require.NoError(t, migrator.Steps(1))
++
++	var builtinCount int
++	require.NoError(t, conn.QueryRow(ctx,
++		`SELECT count(*) FROM roles WHERE code IN ('super_admin', 'admin', 'user')`).Scan(&builtinCount))
++	assert.Equal(t, 3, builtinCount)
++
++	var permissionCount int
++	require.NoError(t, conn.QueryRow(ctx, `SELECT count(*) FROM permissions`).Scan(&permissionCount))
++	assert.Equal(t, 6, permissionCount)
++
++	require.NoError(t, migrator.Steps(-1))
++	var permissionsExist bool
++	require.NoError(t, conn.QueryRow(ctx, `
++		SELECT EXISTS (
++			SELECT 1 FROM information_schema.tables
++			WHERE table_schema = 'public' AND table_name = 'permissions'
++		)`).Scan(&permissionsExist))
++	assert.False(t, permissionsExist)
++
++	var rolesExist bool
++	require.NoError(t, conn.QueryRow(ctx, `
++		SELECT EXISTS (
++			SELECT 1 FROM information_schema.tables
++			WHERE table_schema = 'public' AND table_name = 'roles'
++		)`).Scan(&rolesExist))
++	assert.True(t, rolesExist, "rolling back 000005 must preserve the RBAC schema")
++}
++
+ // TestRBAC_DefaultRoleForExistingUsers verifies the seed that assigns the
+ // default 'user' role to users created before migration 000004 ran.
+ // It runs on a dedicated database: migrate to 000003, insert a user, then
+-// apply 000004 and assert the user gained the default role.
++// apply all remaining migrations and assert the user gained the default role.
+ func TestRBAC_DefaultRoleForExistingUsers(t *testing.T) {
+ 	ctx := context.Background()
+ 
+diff --git a/backend/internal/database/sqlc/models.go b/backend/internal/database/sqlc/models.go
+index 649cd34..422ffa0 100644
+--- a/backend/internal/database/sqlc/models.go
++++ b/backend/internal/database/sqlc/models.go
+@@ -16,6 +16,13 @@ type Department struct {
+ 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+ }
+ 
++type Permission struct {
++	ID        int64              `json:"id"`
++	Code      string             `json:"code"`
++	CreatedAt pgtype.Timestamptz `json:"created_at"`
++	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
++}
++
+ type Role struct {
+ 	ID        int64              `json:"id"`
+ 	Name      string             `json:"name"`
+@@ -24,6 +31,11 @@ type Role struct {
+ 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+ }
+ 
++type RolePermission struct {
++	RoleID       int64 `json:"role_id"`
++	PermissionID int64 `json:"permission_id"`
++}
++
+ type Session struct {
+ 	ID         int64              `json:"id"`
+ 	TokenHash  string             `json:"token_hash"`
+diff --git a/backend/internal/database/sqlc/querier.go b/backend/internal/database/sqlc/querier.go
+index 4189af3..2535946 100644
+--- a/backend/internal/database/sqlc/querier.go
++++ b/backend/internal/database/sqlc/querier.go
+@@ -37,6 +37,7 @@ type Querier interface {
+ 	GetUserByID(ctx context.Context, id int64) (GetUserByIDRow, error)
+ 	GetUserByUsername(ctx context.Context, username string) (GetUserByUsernameRow, error)
+ 	GetUserFullByID(ctx context.Context, id int64) (GetUserFullByIDRow, error)
++	HasPermissionByUserID(ctx context.Context, arg HasPermissionByUserIDParams) (bool, error)
+ 	// Health check query for sqlc.
+ 	// Used to verify database connectivity during readiness checks.
+ 	// Currently unused by scaffold (health check uses pgx Ping directly),
+@@ -46,6 +47,9 @@ type Querier interface {
+ 	// departments.sql
+ 	// Queries for the departments table (self-referencing tree).
+ 	ListDepartments(ctx context.Context) ([]Department, error)
++	// permissions.sql
++	// Effective permissions are the distinct union of grants from all user roles.
++	ListEffectivePermissionsByUserID(ctx context.Context, userID int64) ([]string, error)
+ 	// roles.sql
+ 	// Queries for the roles table. `code` is reserved for phase-2 permission filtering.
+ 	ListRoles(ctx context.Context) ([]Role, error)
+diff --git a/backend/internal/rbac/errors.go b/backend/internal/rbac/errors.go
+index e3d1b50..60cb757 100644
+--- a/backend/internal/rbac/errors.go
++++ b/backend/internal/rbac/errors.go
+@@ -15,6 +15,10 @@ var (
+ 	ErrNameTaken = errors.New("name already taken")
+ 	// ErrDeleteProtected is returned when a delete is blocked by live references.
+ 	ErrDeleteProtected = errors.New("delete blocked by references")
++	// ErrBuiltinRoleCodeImmutable protects the stable codes used by authorization.
++	ErrBuiltinRoleCodeImmutable = errors.New("built-in role code is immutable")
++	// ErrBuiltinRoleDeleteProtected prevents removal of required built-in roles.
++	ErrBuiltinRoleDeleteProtected = errors.New("built-in role cannot be deleted")
+ 	// ErrInvalidInput is returned for inputs the handler cannot validate alone.
+ 	ErrInvalidInput = errors.New("invalid input")
+ )
+diff --git a/backend/internal/rbac/handler.go b/backend/internal/rbac/handler.go
+index 4a80eb3..c2643aa 100644
+--- a/backend/internal/rbac/handler.go
++++ b/backend/internal/rbac/handler.go
+@@ -90,6 +90,10 @@ func errorMapping(err error) (code string, status int, message string, fieldErrs
+ 		return "USER_NOT_FOUND", http.StatusNotFound, "用户不存在", nil
+ 	case errors.Is(err, ErrNameTaken):
+ 		return "NAME_TAKEN", http.StatusConflict, "名称已存在", nil
++	case errors.Is(err, ErrBuiltinRoleCodeImmutable):
++		return "BUILTIN_ROLE_CODE_IMMUTABLE", http.StatusConflict, "内置角色代码不可修改", nil
++	case errors.Is(err, ErrBuiltinRoleDeleteProtected):
++		return "BUILTIN_ROLE_DELETE_PROTECTED", http.StatusConflict, "内置角色不可删除", nil
+ 	case errors.Is(err, ErrDeleteProtected):
+ 		return "DELETE_PROTECTED", http.StatusBadRequest,
+ 			"存在关联数据（下级部门/用户/角色引用），无法删除", []fieldError{{Field: "ids", Code: "REFERENCES", Message: "请先处理关联数据"}}
+diff --git a/backend/internal/rbac/handler_test.go b/backend/internal/rbac/handler_test.go
+index 89fbf03..f6ffef8 100644
+--- a/backend/internal/rbac/handler_test.go
++++ b/backend/internal/rbac/handler_test.go
+@@ -143,7 +143,7 @@ func decodeErr(t *testing.T, w *httptest.ResponseRecorder) (string, []struct {
+ 
+ func TestListRoles_Handler(t *testing.T) {
+ 	m := &mockService{listRolesFn: func(ctx context.Context) ([]RoleView, error) {
+-		return []RoleView{{ID: 1, Name: "超级管理员", Code: "super_admin"}}, nil
++		return []RoleView{{ID: 1, Name: "超级管理员", Code: "super_admin", IsBuiltin: true}}, nil
+ 	}}
+ 	r := setupRouter(newTestHandler(m))
+ 	w := doReq(t, r, http.MethodGet, "/roles", nil)
+@@ -157,6 +157,7 @@ func TestListRoles_Handler(t *testing.T) {
+ 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &res))
+ 	assert.Len(t, res.Data.List, 1)
+ 	assert.Equal(t, 1, res.Data.Total)
++	assert.True(t, res.Data.List[0].IsBuiltin)
+ }
+ 
+ func TestSaveRole_Handler_Valid(t *testing.T) {
+@@ -187,6 +188,17 @@ func TestSaveRole_Handler_NameTaken(t *testing.T) {
+ 	assert.Equal(t, "NAME_TAKEN", code)
+ }
+ 
++func TestSaveRole_Handler_BuiltinCodeImmutable(t *testing.T) {
++	m := &mockService{saveRoleFn: func(ctx context.Context, p SaveRoleParams) error {
++		return ErrBuiltinRoleCodeImmutable
++	}}
++	r := setupRouter(newTestHandler(m))
++	w := doReq(t, r, http.MethodPost, "/roles", map[string]any{"id": 1, "name": "管理员", "code": "renamed_admin"})
++	require.Equal(t, http.StatusConflict, w.Code)
++	code, _ := decodeErr(t, w)
++	assert.Equal(t, "BUILTIN_ROLE_CODE_IMMUTABLE", code)
++}
++
+ func TestDeleteRoles_Handler_EmptyIDs(t *testing.T) {
+ 	m := &mockService{}
+ 	r := setupRouter(newTestHandler(m))
+@@ -209,6 +221,17 @@ func TestDeleteRoles_Handler_Protected(t *testing.T) {
+ 	assert.Equal(t, "ids", fieldErrs[0].Field)
+ }
+ 
++func TestDeleteRoles_Handler_BuiltinProtected(t *testing.T) {
++	m := &mockService{deleteRolesFn: func(ctx context.Context, ids []int64) error {
++		return ErrBuiltinRoleDeleteProtected
++	}}
++	r := setupRouter(newTestHandler(m))
++	w := doReq(t, r, http.MethodPost, "/roles/delete", map[string]any{"ids": []int64{1}})
++	require.Equal(t, http.StatusConflict, w.Code)
++	code, _ := decodeErr(t, w)
++	assert.Equal(t, "BUILTIN_ROLE_DELETE_PROTECTED", code)
++}
++
+ func TestDeleteRoles_Handler_NotFound(t *testing.T) {
+ 	m := &mockService{deleteRolesFn: func(ctx context.Context, ids []int64) error { return ErrRoleNotFound }}
+ 	r := setupRouter(newTestHandler(m))
+diff --git a/backend/internal/rbac/service.go b/backend/internal/rbac/service.go
+index 3c667b4..9128cff 100644
+--- a/backend/internal/rbac/service.go
++++ b/backend/internal/rbac/service.go
+@@ -24,6 +24,7 @@ type RoleView struct {
+ 	ID        int64     `json:"id"`
+ 	Name      string    `json:"name"`
+ 	Code      string    `json:"code"`
++	IsBuiltin bool      `json:"is_builtin"`
+ 	CreatedAt time.Time `json:"created_at"`
+ }
+ 
+@@ -130,7 +131,13 @@ func (s *RBACService) ListRoles(ctx context.Context) ([]RoleView, error) {
+ 	}
+ 	views := make([]RoleView, 0, len(rows))
+ 	for _, r := range rows {
+-		views = append(views, RoleView{ID: r.ID, Name: r.Name, Code: r.Code, CreatedAt: r.CreatedAt.Time})
++		views = append(views, RoleView{
++			ID:        r.ID,
++			Name:      r.Name,
++			Code:      r.Code,
++			IsBuiltin: isBuiltinRoleCode(r.Code),
++			CreatedAt: r.CreatedAt.Time,
++		})
+ 	}
+ 	return views, nil
+ }
+@@ -138,12 +145,16 @@ func (s *RBACService) ListRoles(ctx context.Context) ([]RoleView, error) {
+ // SaveRole creates (no id) or updates (with id) a role.
+ func (s *RBACService) SaveRole(ctx context.Context, p SaveRoleParams) error {
+ 	if p.ID != nil {
+-		if _, err := s.q.GetRoleByID(ctx, *p.ID); err != nil {
++		existing, err := s.q.GetRoleByID(ctx, *p.ID)
++		if err != nil {
+ 			if errors.Is(err, pgx.ErrNoRows) {
+ 				return ErrRoleNotFound
+ 			}
+ 			return fmt.Errorf("check role: %w", err)
+ 		}
++		if isBuiltinRoleCode(existing.Code) && p.Code != existing.Code {
++			return ErrBuiltinRoleCodeImmutable
++		}
+ 		if _, err := s.q.UpdateRole(ctx, sqlc.UpdateRoleParams{ID: *p.ID, Name: p.Name, Code: p.Code}); err != nil {
+ 			return mapUniqueViolation(err)
+ 		}
+@@ -155,26 +166,44 @@ func (s *RBACService) SaveRole(ctx context.Context, p SaveRoleParams) error {
+ 	return nil
+ }
+ 
+-// DeleteRoles removes roles, refusing ones still referenced by users.
++// DeleteRoles removes roles atomically, refusing built-ins and roles still
++// referenced by users. The full batch is validated before any row is deleted.
+ func (s *RBACService) DeleteRoles(ctx context.Context, ids []int64) error {
++	tx, err := s.pool.Begin(ctx)
++	if err != nil {
++		return fmt.Errorf("begin delete roles transaction: %w", err)
++	}
++	defer func() { _ = tx.Rollback(ctx) }()
++
++	qtx := sqlc.New(tx)
+ 	for _, id := range ids {
+-		if _, err := s.q.GetRoleByID(ctx, id); err != nil {
++		role, err := qtx.GetRoleByID(ctx, id)
++		if err != nil {
+ 			if errors.Is(err, pgx.ErrNoRows) {
+ 				return ErrRoleNotFound
+ 			}
+ 			return fmt.Errorf("check role: %w", err)
+ 		}
+-		n, err := s.q.CountUserRolesByRoleID(ctx, id)
++		if isBuiltinRoleCode(role.Code) {
++			return ErrBuiltinRoleDeleteProtected
++		}
++		n, err := qtx.CountUserRolesByRoleID(ctx, id)
+ 		if err != nil {
+ 			return fmt.Errorf("count role users: %w", err)
+ 		}
+ 		if n > 0 {
+ 			return fmt.Errorf("%w: role %d still has users", ErrDeleteProtected, id)
+ 		}
+-		if err := s.q.DeleteRole(ctx, id); err != nil {
++	}
++
++	for _, id := range ids {
++		if err := qtx.DeleteRole(ctx, id); err != nil {
+ 			return fmt.Errorf("delete role: %w", err)
+ 		}
+ 	}
++	if err := tx.Commit(ctx); err != nil {
++		return fmt.Errorf("commit delete roles transaction: %w", err)
++	}
+ 	return nil
+ }
+ 
+@@ -241,33 +270,47 @@ func (s *RBACService) SaveDepartment(ctx context.Context, p SaveDepartmentParams
+ 	return nil
+ }
+ 
+-// DeleteDepartments removes departments, refusing ones with children or users.
++// DeleteDepartments removes departments atomically, refusing ones with
++// children or users. The full batch is validated before any row is deleted.
+ func (s *RBACService) DeleteDepartments(ctx context.Context, ids []int64) error {
++	tx, err := s.pool.Begin(ctx)
++	if err != nil {
++		return fmt.Errorf("begin delete departments transaction: %w", err)
++	}
++	defer func() { _ = tx.Rollback(ctx) }()
++
++	qtx := sqlc.New(tx)
+ 	for _, id := range ids {
+-		if _, err := s.q.GetDepartmentByID(ctx, id); err != nil {
++		if _, err := qtx.GetDepartmentByID(ctx, id); err != nil {
+ 			if errors.Is(err, pgx.ErrNoRows) {
+ 				return ErrDepartmentNotFound
+ 			}
+ 			return fmt.Errorf("check department: %w", err)
+ 		}
+-		children, err := s.q.CountDepartmentsByParentID(ctx, pgtype.Int8{Int64: id, Valid: true})
++		children, err := qtx.CountDepartmentsByParentID(ctx, pgtype.Int8{Int64: id, Valid: true})
+ 		if err != nil {
+ 			return fmt.Errorf("count children: %w", err)
+ 		}
+ 		if children > 0 {
+ 			return fmt.Errorf("%w: department %d has children", ErrDeleteProtected, id)
+ 		}
+-		users, err := s.q.CountUsersByDepartmentID(ctx, pgtype.Int8{Int64: id, Valid: true})
++		users, err := qtx.CountUsersByDepartmentID(ctx, pgtype.Int8{Int64: id, Valid: true})
+ 		if err != nil {
+ 			return fmt.Errorf("count department users: %w", err)
+ 		}
+ 		if users > 0 {
+ 			return fmt.Errorf("%w: department %d has users", ErrDeleteProtected, id)
+ 		}
+-		if err := s.q.DeleteDepartment(ctx, id); err != nil {
++	}
++
++	for _, id := range ids {
++		if err := qtx.DeleteDepartment(ctx, id); err != nil {
+ 			return fmt.Errorf("delete department: %w", err)
+ 		}
+ 	}
++	if err := tx.Commit(ctx); err != nil {
++		return fmt.Errorf("commit delete departments transaction: %w", err)
++	}
+ 	return nil
+ }
+ 
+@@ -416,24 +459,47 @@ func (s *RBACService) SaveUser(ctx context.Context, p SaveUserParams) error {
+ 	return nil
+ }
+ 
+-// DeleteUsers physically deletes users; user_roles cascade away.
++// DeleteUsers physically deletes users atomically; user_roles cascade away.
++// The full batch is validated before any row is deleted.
+ func (s *RBACService) DeleteUsers(ctx context.Context, ids []int64) error {
++	tx, err := s.pool.Begin(ctx)
++	if err != nil {
++		return fmt.Errorf("begin delete users transaction: %w", err)
++	}
++	defer func() { _ = tx.Rollback(ctx) }()
++
++	qtx := sqlc.New(tx)
+ 	for _, id := range ids {
+-		if _, err := s.q.GetUserByID(ctx, id); err != nil {
++		if _, err := qtx.GetUserByID(ctx, id); err != nil {
+ 			if errors.Is(err, pgx.ErrNoRows) {
+ 				return ErrUserNotFound
+ 			}
+ 			return fmt.Errorf("check user: %w", err)
+ 		}
+-		if err := s.q.DeleteUser(ctx, id); err != nil {
++	}
++
++	for _, id := range ids {
++		if err := qtx.DeleteUser(ctx, id); err != nil {
+ 			return fmt.Errorf("delete user: %w", err)
+ 		}
+ 	}
++	if err := tx.Commit(ctx); err != nil {
++		return fmt.Errorf("commit delete users transaction: %w", err)
++	}
+ 	return nil
+ }
+ 
+ // --- helpers ---
+ 
++func isBuiltinRoleCode(code string) bool {
++	switch code {
++	case "super_admin", "admin", "user":
++		return true
++	default:
++		return false
++	}
++}
++
+ // pgint8p maps a *int64 to pgtype.Int8 (nil -> NULL).
+ func pgint8p(v *int64) pgtype.Int8 {
+ 	if v == nil {
+diff --git a/backend/internal/rbac/service_test.go b/backend/internal/rbac/service_test.go
+index eeedbea..4aa0507 100644
+--- a/backend/internal/rbac/service_test.go
++++ b/backend/internal/rbac/service_test.go
+@@ -85,6 +85,7 @@ func TestListRoles_Seeded(t *testing.T) {
+ 	codes := map[string]bool{}
+ 	for _, r := range list {
+ 		codes[r.Code] = true
++		assert.True(t, r.IsBuiltin, "seeded role %q must be marked built-in", r.Code)
+ 	}
+ 	assert.True(t, codes["super_admin"] && codes["admin"] && codes["user"], "three seeded roles present")
+ }
+@@ -134,6 +135,54 @@ func TestSaveRole_UpdateNotFound(t *testing.T) {
+ 	assert.ErrorIs(t, err, ErrRoleNotFound)
+ }
+ 
++func TestSaveRole_BuiltinCodeImmutable(t *testing.T) {
++	adminID := seedRoleID(t, "admin")
++	err := testSvc.SaveRole(testCtx, SaveRoleParams{ID: &adminID, Name: "管理员", Code: "renamed_admin"})
++	assert.ErrorIs(t, err, ErrBuiltinRoleCodeImmutable)
++
++	list, listErr := testSvc.ListRoles(testCtx)
++	require.NoError(t, listErr)
++	for _, role := range list {
++		if role.ID == adminID {
++			assert.Equal(t, "admin", role.Code)
++			assert.True(t, role.IsBuiltin)
++		}
++	}
++}
++
++func TestSaveRole_BuiltinNameCanChangeWhenCodeIsStable(t *testing.T) {
++	userID := seedRoleID(t, "user")
++	err := testSvc.SaveRole(testCtx, SaveRoleParams{ID: &userID, Name: "基础用户", Code: "user"})
++	require.NoError(t, err)
++	t.Cleanup(func() {
++		_ = testSvc.SaveRole(testCtx, SaveRoleParams{ID: &userID, Name: "普通用户", Code: "user"})
++	})
++}
++
++func TestDeleteRoles_BuiltinProtected(t *testing.T) {
++	for _, code := range []string{"super_admin", "admin", "user"} {
++		err := testSvc.DeleteRoles(testCtx, []int64{seedRoleID(t, code)})
++		assert.ErrorIs(t, err, ErrBuiltinRoleDeleteProtected, "role %s", code)
++	}
++}
++
++func TestDeleteRoles_MixedBatchDoesNotPartiallyDelete(t *testing.T) {
++	require.NoError(t, testSvc.SaveRole(testCtx, SaveRoleParams{Name: "原子删除测试角色", Code: "atomic_delete_role"}))
++	customID := seedRoleID(t, "atomic_delete_role")
++	t.Cleanup(func() { _ = testSvc.DeleteRoles(testCtx, []int64{customID}) })
++
++	err := testSvc.DeleteRoles(testCtx, []int64{customID, seedRoleID(t, "admin")})
++	assert.ErrorIs(t, err, ErrBuiltinRoleDeleteProtected)
++
++	list, listErr := testSvc.ListRoles(testCtx)
++	require.NoError(t, listErr)
++	found := false
++	for _, role := range list {
++		found = found || role.ID == customID
++	}
++	assert.True(t, found, "custom role must remain after rejected batch")
++}
++
+ func TestDeleteRoles_UnassignedOK(t *testing.T) {
+ 	err := testSvc.SaveRole(testCtx, SaveRoleParams{Name: "待删角色", Code: "to_delete"})
+ 	require.NoError(t, err)
+@@ -156,12 +205,11 @@ func TestDeleteRoles_UnassignedOK(t *testing.T) {
+ }
+ 
+ func TestDeleteRoles_ReferencedByUser(t *testing.T) {
+-	// Assign the seeded 'user' role to a user, then attempt to delete that role.
+-	user, err := createTestUser(t, testSvc, SaveUserParams{Roles: []int64{seedRoleID(t, "user")}})
++	require.NoError(t, testSvc.SaveRole(testCtx, SaveRoleParams{Name: "关联角色", Code: "referenced_role"}))
++	roleID := seedRoleID(t, "referenced_role")
++	_, err := createTestUser(t, testSvc, SaveUserParams{Roles: []int64{roleID}})
+ 	require.NoError(t, err)
+-	_ = user
+ 
+-	roleID := seedRoleID(t, "user")
+ 	err = testSvc.DeleteRoles(testCtx, []int64{roleID})
+ 	assert.ErrorIs(t, err, ErrDeleteProtected)
+ }
+@@ -279,6 +327,16 @@ func TestDeleteDepartments_NotFound(t *testing.T) {
+ 	assert.ErrorIs(t, err, ErrDepartmentNotFound)
+ }
+ 
++func TestDeleteDepartments_MixedBatchDoesNotPartiallyDelete(t *testing.T) {
++	require.NoError(t, testSvc.SaveDepartment(testCtx, SaveDepartmentParams{Name: "原子删除测试部门"}))
++	departmentID := seedDepartmentID(t, "原子删除测试部门")
++	t.Cleanup(func() { _ = testSvc.DeleteDepartments(testCtx, []int64{departmentID}) })
++
++	err := testSvc.DeleteDepartments(testCtx, []int64{departmentID, 999999})
++	assert.ErrorIs(t, err, ErrDepartmentNotFound)
++	assert.Equal(t, departmentID, seedDepartmentID(t, "原子删除测试部门"))
++}
++
+ // --- users ---
+ 
+ func TestSaveUser_CreateWithRoles(t *testing.T) {
+@@ -358,6 +416,17 @@ func TestDeleteUsers_NotFound(t *testing.T) {
+ 	assert.ErrorIs(t, err, ErrUserNotFound)
+ }
+ 
++func TestDeleteUsers_MixedBatchDoesNotPartiallyDelete(t *testing.T) {
++	userID, err := createTestUser(t, testSvc, SaveUserParams{Roles: []int64{seedRoleID(t, "user")}})
++	require.NoError(t, err)
++	t.Cleanup(func() { _ = testSvc.DeleteUsers(testCtx, []int64{userID}) })
++
++	err = testSvc.DeleteUsers(testCtx, []int64{userID, 999999})
++	assert.ErrorIs(t, err, ErrUserNotFound)
++	_, lookupErr := testSvc.q.GetUserByID(testCtx, userID)
++	require.NoError(t, lookupErr, "user must remain after rejected batch")
++}
++
+ func TestDeleteUsers_OK(t *testing.T) {
+ 	userID, err := createTestUser(t, testSvc, SaveUserParams{Roles: []int64{seedRoleID(t, "user")}})
+ 	require.NoError(t, err)
+diff --git a/frontend/mock/role/index.mock.ts b/frontend/mock/role/index.mock.ts
+index 3d12b2a..76e169f 100644
+--- a/frontend/mock/role/index.mock.ts
++++ b/frontend/mock/role/index.mock.ts
+@@ -649,59 +649,6 @@ const adminList = [
+         ]
+       }
+     ]
+-  },
+-  {
+-    path: '/external-link',
+-    component: '#',
+-    meta: {},
+-    name: 'ExternalLink',
+-    children: [
+-      {
+-        path: 'https://element-plus-admin-doc.cn/',
+-        name: 'DocumentLink',
+-        meta: {
+-          title: 'router.document',
+-          icon: 'vi-clarity:document-solid'
+-        }
+-      }
+-    ]
+-  },
+-  {
+-    path: '/authorization',
+-    component: '#',
+-    redirect: '/authorization/user',
+-    name: 'Authorization',
+-    meta: {
+-      title: 'router.authorization',
+-      icon: 'vi-eos-icons:role-binding',
+-      alwaysShow: true
+-    },
+-    children: [
+-      {
+-        path: 'department',
+-        component: 'views/Authorization/Department/Department',
+-        name: 'Department',
+-        meta: {
+-          title: 'router.department'
+-        }
+-      },
+-      {
+-        path: 'user',
+-        component: 'views/Authorization/User/User',
+-        name: 'User',
+-        meta: {
+-          title: 'router.user'
+-        }
+-      },
+-      {
+-        path: 'role',
+-        component: 'views/Authorization/Role/Role',
+-        name: 'Role',
+-        meta: {
+-          title: 'router.role'
+-        }
+-      }
+-    ]
+   }
+ ]
+ 
+@@ -774,13 +721,7 @@ const testList: string[] = [
+   '/demo/error',
+   '/demo/error/404-demo',
+   '/demo/error/403-demo',
+-  '/demo/error/500-demo',
+-  '/authorization',
+-  '/authorization/department',
+-  '/authorization/user',
+-  '/authorization/role',
+-  '/external-link',
+-  'https://element-plus-admin-doc.cn/'
++  '/demo/error/500-demo'
+ ]
+ const List: any[] = []
+ 
+diff --git a/frontend/package.json b/frontend/package.json
+index 1cfd51e..2670a77 100644
+--- a/frontend/package.json
++++ b/frontend/package.json
+@@ -25,7 +25,8 @@
+     "lint:lint-staged": "lint-staged -c ../.husky/lintstagedrc.cjs",
+     "prepare": "cd .. && husky",
+     "p": "plop",
+-    "icon": "esno ./scripts/icon.ts"
++    "icon": "esno ./scripts/icon.ts",
++    "test:access-control": "esno ./scripts/access-control.test.ts"
+   },
+   "dependencies": {
+     "@iconify/iconify": "^3.1.1",
+diff --git a/frontend/src/api/login/types.ts b/frontend/src/api/login/types.ts
+index 85d5f47..abbc3df 100644
+--- a/frontend/src/api/login/types.ts
++++ b/frontend/src/api/login/types.ts
+@@ -3,8 +3,38 @@ export interface UserLoginType {
+   password: string
+ }
+ 
+-/** Backend user payload (contracts/auth-api.md). */
++export type ManagementPermission =
++  | 'roles.read'
++  | 'roles.write'
++  | 'departments.read'
++  | 'departments.write'
++  | 'users.read'
++  | 'users.write'
++
++export interface DepartmentProfile {
++  id: number
++  name: string
++}
++
++export interface RoleProfile {
++  id: number
++  name: string
++  code: string
++}
++
++/** Backend user profile returned by GET /api/v1/auth/me. */
+ export interface AuthUser {
++  id: number
++  username: string
++  account: string
++  email: string
++  created_at: string
++  department: DepartmentProfile | null
++  roles: RoleProfile[]
++  effective_permissions: ManagementPermission[]
++}
++
++export interface AuthSessionUser {
+   id: number
+   username: string
+   created_at: string
+@@ -15,7 +45,7 @@ export interface AuthResult {
+   token: string
+   token_type: string
+   expires_in: number
+-  user: AuthUser
++  user: AuthSessionUser
+ }
+ 
+ /**
+diff --git a/frontend/src/api/role/index.ts b/frontend/src/api/role/index.ts
+index 7017aab..7f4fcd2 100644
+--- a/frontend/src/api/role/index.ts
++++ b/frontend/src/api/role/index.ts
+@@ -8,6 +8,7 @@ export const getRoleListApi = async (): Promise<IResponse<RoleListResponse>> =>
+     id: String(r.id),
+     roleName: r.name,
+     code: r.code,
++    isBuiltin: Boolean(r.is_builtin),
+     createTime: r.created_at
+   }))
+   return {
+diff --git a/frontend/src/api/role/types.ts b/frontend/src/api/role/types.ts
+index 38695d9..e2d1145 100644
+--- a/frontend/src/api/role/types.ts
++++ b/frontend/src/api/role/types.ts
+@@ -3,6 +3,7 @@ export interface RoleListItem {
+   id: string
+   roleName: string
+   code: string
++  isBuiltin: boolean
+   createTime: string
+ }
+ 
+diff --git a/frontend/src/axios/service.ts b/frontend/src/axios/service.ts
+index 2071c0d..fe35989 100644
+--- a/frontend/src/axios/service.ts
++++ b/frontend/src/axios/service.ts
+@@ -39,13 +39,19 @@ axiosInstance.interceptors.response.use(
+   (error: AxiosError) => {
+     console.log('err： ' + error) // for debug
+     // 提取后端统一错误信封 `{ error: { code, message } }` 中的可读消息。
+-    const respData = error.response?.data as { error?: { message?: string } } | undefined
++    const respData = error.response?.data as
++      | { error?: { code?: string; message?: string } }
++      | undefined
+     const msg = respData?.error?.message || error.message
+     ElMessage.error(msg)
+     // 受保护端点的 401 表示会话失效 → 全局登出跳转；认证端点除外（凭据错误由表单处理）。
+     const url = error.config?.url || ''
++    const userStore = useUserStoreWithOut()
+     if (error.response?.status === 401 && !AUTH_ENDPOINTS.some((e) => url.startsWith(e))) {
+-      useUserStoreWithOut().logout()
++      userStore.reset()
++    } else if (error.response?.status === 403 && respData?.error?.code === 'AUTH_FORBIDDEN') {
++      // 后端授权实时查询数据库；403 时同步最新权限并重建菜单/动态路由。
++      void userStore.refreshAuthorization().catch(() => {})
+     }
+     return Promise.reject(error)
+   }
+diff --git a/frontend/src/components/Permission/src/Permission.vue b/frontend/src/components/Permission/src/Permission.vue
+index 8581a9d..ea5b5ca 100644
+--- a/frontend/src/components/Permission/src/Permission.vue
++++ b/frontend/src/components/Permission/src/Permission.vue
+@@ -2,23 +2,27 @@
+ import { propTypes } from '@/utils/propTypes'
+ import { computed, unref } from 'vue'
+ import { useRouter } from 'vue-router'
++import { useUserStore } from '@/store/modules/user'
++import { hasEffectivePermission, isManagementPermission } from '@/utils/accessControl'
+ 
+ const { currentRoute } = useRouter()
++const userStore = useUserStore()
+ 
+ const props = defineProps({
+   permission: propTypes.string.def()
+ })
+ 
+-const currentPermission = computed(() => {
+-  return unref(currentRoute)?.meta?.permission || []
+-})
+-
+ const hasPermission = computed(() => {
+   const permission = unref(props.permission)
+   if (!permission) {
+     return true
+   }
+-  return unref(currentPermission).includes(permission)
++
++  if (isManagementPermission(permission)) {
++    return hasEffectivePermission(userStore.getEffectivePermissions, permission)
++  }
++
++  return ((unref(currentRoute)?.meta?.permission || []) as string[]).includes(permission)
+ })
+ </script>
+ 
+diff --git a/frontend/src/components/Permission/src/utils.ts b/frontend/src/components/Permission/src/utils.ts
+index 4c0a9b5..8f84366 100644
+--- a/frontend/src/components/Permission/src/utils.ts
++++ b/frontend/src/components/Permission/src/utils.ts
+@@ -1,14 +1,18 @@
+ import { useI18n } from '@/hooks/web/useI18n'
++import { useUserStoreWithOut } from '@/store/modules/user'
++import { hasEffectivePermission, isManagementPermission } from '@/utils/accessControl'
+ import router from '@/router'
+ 
+ export const hasPermi = (value: string) => {
+   const { t } = useI18n()
+-  const permission = (router.currentRoute.value.meta.permission || []) as string[]
+   if (!value) {
+     throw new Error(t('permission.hasPermission'))
+   }
+-  if (permission.includes(value)) {
+-    return true
++
++  if (isManagementPermission(value)) {
++    return hasEffectivePermission(useUserStoreWithOut().getEffectivePermissions, value)
+   }
+-  return false
++
++  const permission = (router.currentRoute.value.meta.permission || []) as string[]
++  return permission.includes(value)
+ }
+diff --git a/frontend/src/components/UserInfo/src/components/LockPage.vue b/frontend/src/components/UserInfo/src/components/LockPage.vue
+index 88d6998..f24851b 100644
+--- a/frontend/src/components/UserInfo/src/components/LockPage.vue
++++ b/frontend/src/components/UserInfo/src/components/LockPage.vue
+@@ -1,22 +1,14 @@
+ <script lang="ts" setup>
+ import { ref } from 'vue'
+ import { ElInput } from 'element-plus'
+-import { resetRouter } from '@/router'
+-import { useRouter } from 'vue-router'
+-import { useStorage } from '@/hooks/web/useStorage'
++import { useUserStore } from '@/store/modules/user'
+ import { useLockStore } from '@/store/modules/lock'
+ import { useI18n } from '@/hooks/web/useI18n'
+ import { useNow } from '@/hooks/web/useNow'
+ import { useDesign } from '@/hooks/web/useDesign'
+ import { Icon } from '@/components/Icon'
+-import { loginOutApi } from '@/api/login'
+-import { useTagsViewStore } from '@/store/modules/tagsView'
+ 
+-const tagsViewStore = useTagsViewStore()
+-
+-const { clear } = useStorage()
+-
+-const { replace } = useRouter()
++const userStore = useUserStore()
+ 
+ const password = ref('')
+ const loading = ref(false)
+@@ -49,14 +41,8 @@ async function unLock() {
+ 
+ // 返回登录
+ async function goLogin() {
+-  const res = await loginOutApi().catch(() => {})
+-  if (res) {
+-    clear()
+-    tagsViewStore.delAllViews()
+-    resetRouter() // 重置静态路由表
+-    lockStore.resetLockInfo()
+-    replace('/login')
+-  }
++  lockStore.resetLockInfo()
++  await userStore.logout()
+ }
+ 
+ const passwordInputRef = ref<ComponentRef<typeof ElInput>>()
+diff --git a/frontend/src/directives/permission/hasPermi.ts b/frontend/src/directives/permission/hasPermi.ts
+index 0a74d94..94f5906 100644
+--- a/frontend/src/directives/permission/hasPermi.ts
++++ b/frontend/src/directives/permission/hasPermi.ts
+@@ -1,33 +1,32 @@
+ import type { App, Directive, DirectiveBinding } from 'vue'
+ import { useI18n } from '@/hooks/web/useI18n'
++import { useUserStoreWithOut } from '@/store/modules/user'
++import { hasEffectivePermission, isManagementPermission } from '@/utils/accessControl'
+ import router from '@/router'
+ 
+ const { t } = useI18n()
+ 
+ const hasPermission = (value: string): boolean => {
+-  const permission = (router.currentRoute.value.meta.permission || []) as string[]
+   if (!value) {
+     throw new Error(t('permission.hasPermission'))
+   }
+-  if (permission.includes(value)) {
+-    return true
++
++  if (isManagementPermission(value)) {
++    return hasEffectivePermission(useUserStoreWithOut().getEffectivePermissions, value)
+   }
+-  return false
++
++  const permission = (router.currentRoute.value.meta.permission || []) as string[]
++  return permission.includes(value)
+ }
+-function hasPermi(el: Element, binding: DirectiveBinding) {
+-  const value = binding.value
+ 
+-  const flag = hasPermission(value)
+-  if (!flag) {
++function hasPermi(el: Element, binding: DirectiveBinding) {
++  if (!hasPermission(binding.value)) {
+     el.parentNode?.removeChild(el)
+   }
+ }
+-const mounted = (el: Element, binding: DirectiveBinding<any>) => {
+-  hasPermi(el, binding)
+-}
+ 
+ const permiDirective: Directive = {
+-  mounted
++  mounted: hasPermi
+ }
+ 
+ export const setupPermissionDirective = (app: App<Element>) => {
+diff --git a/frontend/src/permission.ts b/frontend/src/permission.ts
+index a768ecc..1f5c6a2 100644
+--- a/frontend/src/permission.ts
++++ b/frontend/src/permission.ts
+@@ -7,9 +7,9 @@ import { usePermissionStoreWithOut } from '@/store/modules/permission'
+ import { usePageLoading } from '@/hooks/web/usePageLoading'
+ import { NO_REDIRECT_WHITE_LIST } from '@/constants'
+ import { useUserStoreWithOut } from '@/store/modules/user'
++import { getAdminRoleApi, getTestRoleApi } from '@/api/login'
+ 
+ const { start, done } = useNProgress()
+-
+ const { loadStart, loadDone } = usePageLoading()
+ 
+ router.beforeEach(async (to, from, next) => {
+@@ -18,58 +18,76 @@ router.beforeEach(async (to, from, next) => {
+   const permissionStore = usePermissionStoreWithOut()
+   const appStore = useAppStoreWithOut()
+   const userStore = useUserStoreWithOut()
+-  // 有持久化令牌但尚未加载用户信息：用 /auth/me 验证令牌有效性。
+-  if (!userStore.getUserInfo && userStore.getToken) {
++
++  if (userStore.getToken && !userStore.getProfileHydrated) {
+     try {
+       const ok = await userStore.fetchUserInfo()
+       if (!ok) {
+-        userStore.reset()
++        userStore.reset(false)
+       }
+-    } catch (e) {
+-      userStore.reset()
++    } catch (_error) {
++      userStore.reset(false)
+     }
+   }
+-  if (userStore.getUserInfo) {
++
++  if (userStore.getUserInfo && userStore.getProfileHydrated) {
+     if (to.path === '/login') {
+       next({ path: '/' })
+-    } else {
+-      if (permissionStore.getIsAddRouters) {
+-        next()
+-        return
+-      }
++      return
++    }
+ 
+-      // 开发者可根据实际情况进行修改
+-      const roleRouters = userStore.getRoleRouters || []
++    if (permissionStore.getIsAddRouters) {
++      next()
++      return
++    }
+ 
+-      // 是否使用动态路由
+-      if (appStore.getDynamicRouter) {
+-        appStore.serverDynamicRouter
+-          ? await permissionStore.generateRoutes('server', roleRouters as AppCustomRouteRecordRaw[])
+-          : await permissionStore.generateRoutes('frontEnd', roleRouters as string[])
+-      } else {
+-        await permissionStore.generateRoutes('static')
+-      }
++    let routeType: 'server' | 'frontEnd' | 'static' = 'static'
++    let roleRouters: string[] | AppCustomRouteRecordRaw[] = []
+ 
+-      permissionStore.getAddRouters.forEach((route) => {
+-        router.addRoute(route as unknown as RouteRecordRaw) // 动态添加可访问路由表
+-      })
+-      const redirectPath = from.query.redirect || to.path
+-      const redirect = decodeURIComponent(redirectPath as string)
+-      const nextData = to.path === redirect ? { ...to, replace: true } : { path: redirect }
+-      permissionStore.setIsAddRouters(true)
+-      next(nextData)
++    if (appStore.getDynamicRouter) {
++      const params = { roleName: userStore.getUserInfo.username }
++      try {
++        if (appStore.getServerDynamicRouter) {
++          routeType = 'server'
++          const res = await getAdminRoleApi(params)
++          roleRouters = res?.data || []
++        } else {
++          routeType = 'frontEnd'
++          const res = await getTestRoleApi(params)
++          roleRouters = res?.data || []
++        }
++        userStore.setRoleRouters(roleRouters)
++      } catch (_error) {
++        // Demo 路由 Mock 不可用时回退静态 Demo；真实业务权限仍由 /auth/me 决定。
++        routeType = 'static'
++        roleRouters = []
++        userStore.setRoleRouters(undefined)
++      }
+     }
++
++    await permissionStore.generateRoutes(routeType, roleRouters, userStore.getEffectivePermissions)
++
++    permissionStore.getAddRouters.forEach((route) => {
++      router.addRoute(route as unknown as RouteRecordRaw)
++    })
++
++    const redirectPath = from.query.redirect || to.path
++    const redirect = decodeURIComponent(redirectPath as string)
++    const nextData = to.path === redirect ? { ...to, replace: true } : { path: redirect }
++    permissionStore.setIsAddRouters(true)
++    next(nextData)
++    return
++  }
++
++  if (NO_REDIRECT_WHITE_LIST.indexOf(to.path) !== -1) {
++    next()
+   } else {
+-    if (NO_REDIRECT_WHITE_LIST.indexOf(to.path) !== -1) {
+-      next()
+-    } else {
+-      next(`/login?redirect=${to.path}`) // 否则全部重定向到登录页
+-    }
++    next(`/login?redirect=${to.path}`)
+   }
+ })
+ 
+ router.afterEach((to) => {
+   useTitle(to?.meta?.title as string)
+-  done() // 结束Progress
++  done()
+   loadDone()
+ })
+diff --git a/frontend/src/router/index.ts b/frontend/src/router/index.ts
+index df5b4b5..9a95121 100644
+--- a/frontend/src/router/index.ts
++++ b/frontend/src/router/index.ts
+@@ -2,7 +2,6 @@ import { createRouter, createWebHashHistory } from 'vue-router'
+ import type { RouteRecordRaw } from 'vue-router'
+ import type { App } from 'vue'
+ import { Layout, getParentLayout } from '@/utils/routerHelper'
+-import { NO_RESET_WHITE_LIST } from '@/constants'
+ 
+ export const constantRouterMap: AppRouteRecordRaw[] = [
+   {
+@@ -852,7 +851,8 @@ export const asyncRouterMap: AppRouteRecordRaw[] = [
+         component: () => import('@/views/Authorization/Department/Department.vue'),
+         name: 'Department',
+         meta: {
+-          title: 'router.department'
++          title: 'router.department',
++          requiredPermission: 'departments.read'
+         }
+       },
+       {
+@@ -860,7 +860,8 @@ export const asyncRouterMap: AppRouteRecordRaw[] = [
+         component: () => import('@/views/Authorization/User/User.vue'),
+         name: 'User',
+         meta: {
+-          title: 'router.user'
++          title: 'router.user',
++          requiredPermission: 'users.read'
+         }
+       },
+       {
+@@ -868,13 +869,22 @@ export const asyncRouterMap: AppRouteRecordRaw[] = [
+         component: () => import('@/views/Authorization/Role/Role.vue'),
+         name: 'Role',
+         meta: {
+-          title: 'router.role'
++          title: 'router.role',
++          requiredPermission: 'roles.read'
+         }
+       }
+     ]
+   }
+ ]
+ 
++export const demoRouterMap = asyncRouterMap.filter((route) => route.path === '/demo')
++export const alwaysAvailableRouterMap = asyncRouterMap.filter(
++  (route) => route.path === '/external-link'
++)
++export const authorizationRouterMap = asyncRouterMap.filter(
++  (route) => route.path === '/authorization'
++)
++
+ const router = createRouter({
+   history: createWebHashHistory(),
+   strict: true,
+@@ -882,11 +892,25 @@ const router = createRouter({
+   scrollBehavior: () => ({ left: 0, top: 0 })
+ })
+ 
++const collectRouteNames = (routes: AppRouteRecordRaw[]): Set<string> => {
++  const names = new Set<string>()
++  const visit = (items: AppRouteRecordRaw[]) => {
++    items.forEach((route) => {
++      route.name && names.add(route.name)
++      route.children && visit(route.children)
++    })
++  }
++  visit(routes)
++  return names
++}
++
++const constantRouteNames = collectRouteNames(constantRouterMap)
++
+ export const resetRouter = (): void => {
+   router.getRoutes().forEach((route) => {
+-    const { name } = route
+-    if (name && !NO_RESET_WHITE_LIST.includes(name as string)) {
+-      router.hasRoute(name) && router.removeRoute(name)
++    const name = route.name as string | undefined
++    if (name && !constantRouteNames.has(name) && router.hasRoute(name)) {
++      router.removeRoute(name)
+     }
+   })
+ }
+diff --git a/frontend/src/store/modules/permission.ts b/frontend/src/store/modules/permission.ts
+index 32c107e..2c730a8 100644
+--- a/frontend/src/store/modules/permission.ts
++++ b/frontend/src/store/modules/permission.ts
+@@ -1,10 +1,18 @@
+ import { defineStore } from 'pinia'
+-import { asyncRouterMap, constantRouterMap } from '@/router'
++import {
++  alwaysAvailableRouterMap,
++  authorizationRouterMap,
++  constantRouterMap,
++  demoRouterMap,
++  resetRouter
++} from '@/router'
+ import {
+   generateRoutesByFrontEnd,
+   generateRoutesByServer,
+   flatMultiLevelRoutes
+ } from '@/utils/routerHelper'
++import { filterRoutesByPermissions } from '@/utils/accessControl'
++import type { ManagementPermission } from '@/api/login/types'
+ import { store } from '../index'
+ import { cloneDeep } from 'lodash-es'
+ 
+@@ -39,21 +47,29 @@ export const usePermissionStore = defineStore('permission', {
+   actions: {
+     generateRoutes(
+       type: 'server' | 'frontEnd' | 'static',
+-      routers?: AppCustomRouteRecordRaw[] | string[]
+-    ): Promise<unknown> {
++      routers: AppCustomRouteRecordRaw[] | string[] = [],
++      effectivePermissions: readonly ManagementPermission[] = []
++    ): Promise<void> {
+       return new Promise<void>((resolve) => {
+-        let routerMap: AppRouteRecordRaw[] = []
++        let demoRoutes: AppRouteRecordRaw[] = []
+         if (type === 'server') {
+-          // 模拟后端过滤菜单
+-          routerMap = generateRoutesByServer(routers as AppCustomRouteRecordRaw[])
++          demoRoutes = generateRoutesByServer(routers as AppCustomRouteRecordRaw[]).filter(
++            (route) => route.path === '/demo'
++          )
+         } else if (type === 'frontEnd') {
+-          // 模拟前端过滤菜单
+-          routerMap = generateRoutesByFrontEnd(cloneDeep(asyncRouterMap), routers as string[])
++          demoRoutes = generateRoutesByFrontEnd(cloneDeep(demoRouterMap), routers as string[])
+         } else {
+-          // 直接读取静态路由表
+-          routerMap = cloneDeep(asyncRouterMap)
++          demoRoutes = cloneDeep(demoRouterMap)
+         }
+-        // 动态路由，404一定要放到最后面
++
++        const businessRoutes = filterRoutesByPermissions(
++          cloneDeep(authorizationRouterMap),
++          effectivePermissions
++        )
++        const routerMap = demoRoutes
++          .concat(cloneDeep(alwaysAvailableRouterMap))
++          .concat(businessRoutes)
++
+         this.addRouters = routerMap.concat([
+           {
+             path: '/:path(.*)*',
+@@ -65,32 +81,24 @@ export const usePermissionStore = defineStore('permission', {
+             }
+           }
+         ])
+-        // 渲染菜单的所有路由
+         this.routers = cloneDeep(constantRouterMap).concat(routerMap)
+         resolve()
+       })
+     },
++    resetRoutes(): void {
++      resetRouter()
++      this.routers = []
++      this.addRouters = []
++      this.isAddRouters = false
++      this.menuTabRouters = []
++    },
+     setIsAddRouters(state: boolean): void {
+       this.isAddRouters = state
+     },
+     setMenuTabRouters(routers: AppRouteRecordRaw[]): void {
+       this.menuTabRouters = routers
+     }
+-  },
+-  persist: [
+-    {
+-      pick: ['routers'],
+-      storage: localStorage
+-    },
+-    {
+-      pick: ['addRouters'],
+-      storage: localStorage
+-    },
+-    {
+-      pick: ['menuTabRouters'],
+-      storage: localStorage
+-    }
+-  ]
++  }
+ })
+ 
+ export const usePermissionStoreWithOut = () => {
+diff --git a/frontend/src/store/modules/user.ts b/frontend/src/store/modules/user.ts
+index b12c296..8b73124 100644
+--- a/frontend/src/store/modules/user.ts
++++ b/frontend/src/store/modules/user.ts
+@@ -1,14 +1,18 @@
+ import { defineStore } from 'pinia'
+ import { store } from '../index'
+-import { AuthUser, UserLoginType } from '@/api/login/types'
++import type { AuthUser, ManagementPermission, UserLoginType } from '@/api/login/types'
+ import { ElMessageBox } from 'element-plus'
+ import { useI18n } from '@/hooks/web/useI18n'
+ import { loginOutApi, loginApi, registerApi, getUserInfoApi } from '@/api/login'
+ import { useTagsViewStore } from './tagsView'
++import { usePermissionStoreWithOut } from './permission'
+ import router from '@/router'
+ 
++let authorizationRefreshPromise: Promise<boolean> | undefined
++
+ interface UserState {
+   userInfo?: AuthUser
++  profileHydrated: boolean
+   tokenKey: string
+   token: string
+   roleRouters?: string[] | AppCustomRouteRecordRaw[]
+@@ -20,10 +24,10 @@ export const useUserStore = defineStore('user', {
+   state: (): UserState => {
+     return {
+       userInfo: undefined,
++      profileHydrated: false,
+       tokenKey: 'Authorization',
+       token: '',
+       roleRouters: undefined,
+-      // 记住我
+       rememberMe: true,
+       loginInfo: undefined
+     }
+@@ -38,6 +42,12 @@ export const useUserStore = defineStore('user', {
+     getUserInfo(): AuthUser | undefined {
+       return this.userInfo
+     },
++    getProfileHydrated(): boolean {
++      return this.profileHydrated
++    },
++    getEffectivePermissions(): ManagementPermission[] {
++      return this.userInfo?.effective_permissions || []
++    },
+     getRoleRouters(): string[] | AppCustomRouteRecordRaw[] | undefined {
+       return this.roleRouters
+     },
+@@ -58,35 +68,74 @@ export const useUserStore = defineStore('user', {
+     setUserInfo(userInfo?: AuthUser) {
+       this.userInfo = userInfo
+     },
+-    setRoleRouters(roleRouters: string[] | AppCustomRouteRecordRaw[]) {
++    setRoleRouters(roleRouters?: string[] | AppCustomRouteRecordRaw[]) {
+       this.roleRouters = roleRouters
+     },
+-    /** 登录：调用真实后端，成功后保存令牌与用户信息。 */
++    clearAuthorizationState() {
++      const tagsViewStore = useTagsViewStore()
++      const permissionStore = usePermissionStoreWithOut()
++      tagsViewStore.delAllViews()
++      permissionStore.resetRoutes()
++      this.setUserInfo(undefined)
++      this.profileHydrated = false
++      this.setRoleRouters(undefined)
++    },
++    async applyAuthToken(token?: string): Promise<boolean> {
++      if (!token) return false
++
++      this.clearAuthorizationState()
++      this.setToken(token)
++      try {
++        const hydrated = await this.fetchUserInfo()
++        if (!hydrated) {
++          if (this.token) await loginOutApi().catch(() => {})
++          this.reset(false)
++        }
++        return hydrated
++      } catch (error) {
++        // 登录已创建服务端会话时尽量撤销，避免 /auth/me 临时失败留下孤立会话。
++        if (this.token) await loginOutApi().catch(() => {})
++        this.reset(false)
++        throw error
++      }
++    },
++    /** 登录后以 /auth/me 作为完整用户和权限信息的唯一来源。 */
+     async login(formData: UserLoginType): Promise<boolean> {
+       const res = await loginApi(formData)
+-      this.applyAuthResult(res?.data)
+-      return !!res?.data?.token
++      return this.applyAuthToken(res?.data?.token)
+     },
+-    /** 注册：调用真实后端，注册即登录。 */
++    /** 注册即登录，并立即加载完整用户和权限信息。 */
+     async register(formData: UserLoginType): Promise<boolean> {
+       const res = await registerApi(formData)
+-      this.applyAuthResult(res?.data)
+-      return !!res?.data?.token
++      return this.applyAuthToken(res?.data?.token)
+     },
+-    /** 用 /auth/me 验证持久化令牌有效性并恢复用户信息。 */
++    /** 用 /auth/me 验证令牌并恢复完整用户与有效权限。 */
+     async fetchUserInfo(): Promise<boolean> {
++      this.profileHydrated = false
+       const res = await getUserInfoApi()
+       if (res?.data?.user) {
+         this.setUserInfo(res.data.user)
++        this.profileHydrated = true
+         return true
+       }
+       return false
+     },
+-    applyAuthResult(result?: { token: string; user: AuthUser }) {
+-      if (result?.token) {
+-        this.setToken(result.token)
+-        this.setUserInfo(result.user)
+-      }
++    /** 403 后重新同步权限，并让全局守卫按最新权限重建动态路由。 */
++    refreshAuthorization(): Promise<boolean> {
++      if (authorizationRefreshPromise) return authorizationRefreshPromise
++
++      authorizationRefreshPromise = (async () => {
++        const hydrated = await this.fetchUserInfo()
++        if (!hydrated) return false
++
++        usePermissionStoreWithOut().resetRoutes()
++        await router.replace(router.currentRoute.value.fullPath)
++        return true
++      })().finally(() => {
++        authorizationRefreshPromise = undefined
++      })
++
++      return authorizationRefreshPromise
+     },
+     logoutConfirm() {
+       const { t } = useI18n()
+@@ -100,20 +149,18 @@ export const useUserStore = defineStore('user', {
+         })
+         .catch(() => {})
+     },
+-    reset() {
+-      const tagsViewStore = useTagsViewStore()
+-      tagsViewStore.delAllViews()
++    reset(redirectToLogin = true) {
++      this.clearAuthorizationState()
+       this.setToken('')
+-      this.setUserInfo(undefined)
+-      this.setRoleRouters([])
+-      router.replace('/login')
++      if (redirectToLogin && router.currentRoute.value.path !== '/login') {
++        router.replace('/login')
++      }
+     },
+     /** 退出：调用真实后端撤销会话（失败也本地登出），随后清空本地状态。 */
+     async logout() {
+       try {
+         await loginOutApi()
+       } catch (e) {
+-        // 会话可能已失效（401），忽略后照常本地登出。
+         console.warn('logout api failed, clearing local state', e)
+       }
+       this.reset()
+@@ -125,7 +172,12 @@ export const useUserStore = defineStore('user', {
+       this.loginInfo = loginInfo
+     }
+   },
+-  persist: true
++  persist: [
++    {
++      pick: ['tokenKey', 'token', 'rememberMe', 'loginInfo'],
++      storage: localStorage
++    }
++  ]
+ })
+ 
+ export const useUserStoreWithOut = () => {
+diff --git a/frontend/src/views/Authorization/Department/Department.vue b/frontend/src/views/Authorization/Department/Department.vue
+index ce6bb5c..18bbb03 100644
+--- a/frontend/src/views/Authorization/Department/Department.vue
++++ b/frontend/src/views/Authorization/Department/Department.vue
+@@ -12,11 +12,13 @@ import {
+ } from '@/api/department'
+ import type { DepartmentItem } from '@/api/department/types'
+ import { useTable } from '@/hooks/web/useTable'
+-import { ref, unref, reactive } from 'vue'
++import { computed, ref, unref, reactive } from 'vue'
+ import Write from './components/Write.vue'
+ import Detail from './components/Detail.vue'
+ import { CrudSchema, useCrudSchemas } from '@/hooks/web/useCrudSchemas'
+ import { BaseButton } from '@/components/Button'
++import { useUserStore } from '@/store/modules/user'
++import { hasEffectivePermission } from '@/utils/accessControl'
+ 
+ const ids = ref<string[]>([])
+ 
+@@ -48,6 +50,10 @@ const setSearchParams = (params: any) => {
+ }
+ 
+ const { t } = useI18n()
++const userStore = useUserStore()
++const canWrite = computed(() =>
++  hasEffectivePermission(userStore.getEffectivePermissions, 'departments.write')
++)
+ 
+ const crudSchemas = reactive<CrudSchema[]>([
+   {
+@@ -147,15 +153,19 @@ const crudSchemas = reactive<CrudSchema[]>([
+         default: (data: any) => {
+           return (
+             <>
+-              <BaseButton type="primary" onClick={() => action(data.row, 'edit')}>
+-                {t('exampleDemo.edit')}
+-              </BaseButton>
++              {unref(canWrite) ? (
++                <BaseButton type="primary" onClick={() => action(data.row, 'edit')}>
++                  {t('exampleDemo.edit')}
++                </BaseButton>
++              ) : null}
+               <BaseButton type="success" onClick={() => action(data.row, 'detail')}>
+                 {t('exampleDemo.detail')}
+               </BaseButton>
+-              <BaseButton type="danger" onClick={() => delData(data.row)}>
+-                {t('exampleDemo.del')}
+-              </BaseButton>
++              {unref(canWrite) ? (
++                <BaseButton type="danger" onClick={() => delData(data.row)}>
++                  {t('exampleDemo.del')}
++                </BaseButton>
++              ) : null}
+             </>
+           )
+         }
+@@ -229,8 +239,10 @@ const save = async () => {
+     <Search :schema="allSchemas.searchSchema" @search="setSearchParams" @reset="setSearchParams" />
+ 
+     <div class="mb-10px">
+-      <BaseButton type="primary" @click="AddAction">{{ t('exampleDemo.add') }}</BaseButton>
+-      <BaseButton :loading="delLoading" type="danger" @click="delData(null)">
++      <BaseButton v-if="canWrite" type="primary" @click="AddAction">
++        {{ t('exampleDemo.add') }}
++      </BaseButton>
++      <BaseButton v-if="canWrite" :loading="delLoading" type="danger" @click="delData(null)">
+         {{ t('exampleDemo.del') }}
+       </BaseButton>
+     </div>
+@@ -264,7 +276,7 @@ const save = async () => {
+ 
+     <template #footer>
+       <BaseButton
+-        v-if="actionType !== 'detail'"
++        v-if="actionType !== 'detail' && canWrite"
+         type="primary"
+         :loading="saveLoading"
+         @click="save"
+diff --git a/frontend/src/views/Authorization/Role/Role.vue b/frontend/src/views/Authorization/Role/Role.vue
+index 41370ed..4d5c521 100644
+--- a/frontend/src/views/Authorization/Role/Role.vue
++++ b/frontend/src/views/Authorization/Role/Role.vue
+@@ -1,6 +1,7 @@
+ <script setup lang="tsx">
+-import { reactive, ref, unref } from 'vue'
++import { computed, reactive, ref, unref } from 'vue'
+ import { getRoleListApi, saveRoleApi, deleteRoleApi } from '@/api/role'
++import type { RoleListItem } from '@/api/role/types'
+ import { useTable } from '@/hooks/web/useTable'
+ import { useI18n } from '@/hooks/web/useI18n'
+ import { Table, TableColumn } from '@/components/Table'
+@@ -10,8 +11,14 @@ import Write from './components/Write.vue'
+ import Detail from './components/Detail.vue'
+ import { Dialog } from '@/components/Dialog'
+ import { BaseButton } from '@/components/Button'
++import { useUserStore } from '@/store/modules/user'
++import { hasEffectivePermission } from '@/utils/accessControl'
+ 
+ const { t } = useI18n()
++const userStore = useUserStore()
++const canWrite = computed(() =>
++  hasEffectivePermission(userStore.getEffectivePermissions, 'roles.write')
++)
+ 
+ // 角色表单字段：真实后端角色仅包含 名称 + 编码。
+ const roleFormSchema = reactive<FormSchema[]>([
+@@ -49,7 +56,8 @@ const { getList, getElTableExpose, delList } = tableMethods
+ const tableColumns = reactive<TableColumn[]>([
+   {
+     field: 'selection',
+-    type: 'selection'
++    type: 'selection',
++    selectable: (row: RoleListItem) => !row.isBuiltin
+   },
+   {
+     field: 'index',
+@@ -77,15 +85,19 @@ const tableColumns = reactive<TableColumn[]>([
+         const row = data.row
+         return (
+           <>
+-            <BaseButton type="primary" onClick={() => action(row, 'edit')}>
+-              {t('exampleDemo.edit')}
+-            </BaseButton>
++            {unref(canWrite) ? (
++              <BaseButton type="primary" onClick={() => action(row, 'edit')}>
++                {t('exampleDemo.edit')}
++              </BaseButton>
++            ) : null}
+             <BaseButton type="success" onClick={() => action(row, 'detail')}>
+               {t('exampleDemo.detail')}
+             </BaseButton>
+-            <BaseButton type="danger" onClick={() => delData(row)}>
+-              {t('exampleDemo.del')}
+-            </BaseButton>
++            {unref(canWrite) && !row.isBuiltin ? (
++              <BaseButton type="danger" onClick={() => delData(row)}>
++                {t('exampleDemo.del')}
++              </BaseButton>
++            ) : null}
+           </>
+         )
+       }
+@@ -150,8 +162,10 @@ const save = async () => {
+ <template>
+   <ContentWrap>
+     <div class="mb-10px">
+-      <BaseButton type="primary" @click="AddAction">{{ t('exampleDemo.add') }}</BaseButton>
+-      <BaseButton :loading="delLoading" type="danger" @click="delData()">
++      <BaseButton v-if="canWrite" type="primary" @click="AddAction">
++        {{ t('exampleDemo.add') }}
++      </BaseButton>
++      <BaseButton v-if="canWrite" :loading="delLoading" type="danger" @click="delData()">
+         {{ t('exampleDemo.del') }}
+       </BaseButton>
+     </div>
+@@ -179,7 +193,7 @@ const save = async () => {
+ 
+     <template #footer>
+       <BaseButton
+-        v-if="actionType !== 'detail'"
++        v-if="actionType !== 'detail' && canWrite"
+         type="primary"
+         :loading="saveLoading"
+         @click="save"
+diff --git a/frontend/src/views/Authorization/Role/components/Write.vue b/frontend/src/views/Authorization/Role/components/Write.vue
+index 0f8485c..0238b89 100644
+--- a/frontend/src/views/Authorization/Role/components/Write.vue
++++ b/frontend/src/views/Authorization/Role/components/Write.vue
+@@ -1,7 +1,7 @@
+ <script setup lang="ts">
+ import { Form, FormSchema } from '@/components/Form'
+ import { useForm } from '@/hooks/web/useForm'
+-import { PropType, reactive, watch } from 'vue'
++import { computed, PropType, reactive, watch } from 'vue'
+ import { useValidator } from '@/hooks/web/useValidator'
+ import { RoleListItem } from '@/api/role/types'
+ 
+@@ -23,6 +23,20 @@ const rules = reactive({
+   code: [required()]
+ })
+ 
++const effectiveFormSchema = computed(() =>
++  props.formSchema.map((schema) =>
++    schema.field === 'code'
++      ? {
++          ...schema,
++          componentProps: {
++            ...schema.componentProps,
++            disabled: props.currentRow?.isBuiltin === true
++          }
++        }
++      : schema
++  )
++)
++
+ const { formRegister, formMethods } = useForm()
+ const { setValues, getFormData, getElFormExpose } = formMethods
+ 
+@@ -55,5 +69,5 @@ defineExpose({
+ </script>
+ 
+ <template>
+-  <Form :rules="rules" @register="formRegister" :schema="formSchema" />
++  <Form :rules="rules" @register="formRegister" :schema="effectiveFormSchema" />
+ </template>
+diff --git a/frontend/src/views/Authorization/User/User.vue b/frontend/src/views/Authorization/User/User.vue
+index ff1569d..057a97f 100644
+--- a/frontend/src/views/Authorization/User/User.vue
++++ b/frontend/src/views/Authorization/User/User.vue
+@@ -2,7 +2,7 @@
+ import { ContentWrap } from '@/components/ContentWrap'
+ import { useI18n } from '@/hooks/web/useI18n'
+ import { Table } from '@/components/Table'
+-import { ref, unref, nextTick, watch, reactive } from 'vue'
++import { computed, ref, unref, nextTick, watch, reactive } from 'vue'
+ import { ElTree, ElInput, ElDivider } from 'element-plus'
+ import { getDepartmentApi, getUserByIdApi, saveUserApi, deleteUserByIdApi } from '@/api/department'
+ import type { DepartmentItem, DepartmentUserItem } from '@/api/department/types'
+@@ -14,8 +14,21 @@ import { Dialog } from '@/components/Dialog'
+ import { getRoleListApi } from '@/api/role'
+ import { CrudSchema, useCrudSchemas } from '@/hooks/web/useCrudSchemas'
+ import { BaseButton } from '@/components/Button'
++import { useUserStore } from '@/store/modules/user'
++import { hasEffectivePermission } from '@/utils/accessControl'
+ 
+ const { t } = useI18n()
++const userStore = useUserStore()
++const canWrite = computed(() =>
++  hasEffectivePermission(userStore.getEffectivePermissions, 'users.write')
++)
++const canReadDepartments = computed(() =>
++  hasEffectivePermission(userStore.getEffectivePermissions, 'departments.read')
++)
++const canReadRoles = computed(() =>
++  hasEffectivePermission(userStore.getEffectivePermissions, 'roles.read')
++)
++const canEdit = computed(() => canWrite.value && canReadDepartments.value && canReadRoles.value)
+ 
+ const { tableRegister, tableState, tableMethods } = useTable({
+   fetchDataApi: async () => {
+@@ -188,15 +201,19 @@ const crudSchemas = reactive<CrudSchema[]>([
+           const row = data.row as DepartmentUserItem
+           return (
+             <>
+-              <BaseButton type="primary" onClick={() => action(row, 'edit')}>
+-                {t('exampleDemo.edit')}
+-              </BaseButton>
++              {unref(canEdit) ? (
++                <BaseButton type="primary" onClick={() => action(row, 'edit')}>
++                  {t('exampleDemo.edit')}
++                </BaseButton>
++              ) : null}
+               <BaseButton type="success" onClick={() => action(row, 'detail')}>
+                 {t('exampleDemo.detail')}
+               </BaseButton>
+-              <BaseButton type="danger" onClick={() => delData(row)}>
+-                {t('exampleDemo.del')}
+-              </BaseButton>
++              {unref(canWrite) ? (
++                <BaseButton type="danger" onClick={() => delData(row)}>
++                  {t('exampleDemo.del')}
++                </BaseButton>
++              ) : null}
+             </>
+           )
+         }
+@@ -226,7 +243,9 @@ const fetchDepartment = async () => {
+   await nextTick()
+   unref(treeEl)?.setCurrentKey(currentNodeKey.value)
+ }
+-fetchDepartment()
++if (unref(canReadDepartments)) {
++  fetchDepartment()
++}
+ 
+ const currentDepartment = ref('')
+ watch(
+@@ -279,7 +298,10 @@ const delData = async (row?: DepartmentUserItem) => {
+ const action = (row: DepartmentUserItem, type: string) => {
+   dialogTitle.value = t(type === 'edit' ? 'exampleDemo.edit' : 'exampleDemo.detail')
+   actionType.value = type
+-  currentRow.value = { ...row, department: unref(treeEl)?.getCurrentNode() || {} }
++  currentRow.value = {
++    ...row,
++    department: unref(treeEl)?.getCurrentNode() || row.department || {}
++  }
+   dialogVisible.value = true
+ }
+ 
+@@ -311,7 +333,7 @@ const save = async () => {
+ 
+ <template>
+   <div class="flex w-100% h-100%">
+-    <ContentWrap class="w-250px">
++    <ContentWrap v-if="canReadDepartments" class="w-250px">
+       <div class="flex justify-center items-center">
+         <div class="flex-1">{{ t('userDemo.departmentList') }}</div>
+         <ElInput
+@@ -353,8 +375,10 @@ const save = async () => {
+       />
+ 
+       <div class="mb-10px">
+-        <BaseButton type="primary" @click="AddAction">{{ t('exampleDemo.add') }}</BaseButton>
+-        <BaseButton :loading="delLoading" type="danger" @click="delData()">
++        <BaseButton v-if="canEdit" type="primary" @click="AddAction">
++          {{ t('exampleDemo.add') }}
++        </BaseButton>
++        <BaseButton v-if="canWrite" :loading="delLoading" type="danger" @click="delData()">
+           {{ t('exampleDemo.del') }}
+         </BaseButton>
+       </div>
+@@ -387,7 +411,7 @@ const save = async () => {
+ 
+       <template #footer>
+         <BaseButton
+-          v-if="actionType !== 'detail'"
++          v-if="actionType !== 'detail' && canEdit"
+           type="primary"
+           :loading="saveLoading"
+           @click="save"
+diff --git a/frontend/src/views/Login/components/LoginForm.vue b/frontend/src/views/Login/components/LoginForm.vue
+index eaf3471..3194068 100644
+--- a/frontend/src/views/Login/components/LoginForm.vue
++++ b/frontend/src/views/Login/components/LoginForm.vue
+@@ -4,11 +4,8 @@ import { Form, FormSchema } from '@/components/Form'
+ import { useI18n } from '@/hooks/web/useI18n'
+ import { ElCheckbox, ElLink, ElAlert } from 'element-plus'
+ import { useForm } from '@/hooks/web/useForm'
+-import { getTestRoleApi, getAdminRoleApi } from '@/api/login'
+-import { useAppStore } from '@/store/modules/app'
+-import { usePermissionStore } from '@/store/modules/permission'
+ import { useRouter } from 'vue-router'
+-import type { RouteLocationNormalizedLoaded, RouteRecordRaw } from 'vue-router'
++import type { RouteLocationNormalizedLoaded } from 'vue-router'
+ import { UserLoginType } from '@/api/login/types'
+ import { useValidator } from '@/hooks/web/useValidator'
+ import { Icon } from '@/components/Icon'
+@@ -19,13 +16,9 @@ const { required } = useValidator()
+ 
+ const emit = defineEmits(['to-register'])
+ 
+-const appStore = useAppStore()
+-
+ const userStore = useUserStore()
+ 
+-const permissionStore = usePermissionStore()
+-
+-const { currentRoute, addRoute, push } = useRouter()
++const { currentRoute, push } = useRouter()
+ 
+ const { t } = useI18n()
+ 
+@@ -295,17 +288,8 @@ const signIn = async () => {
+             userStore.setLoginInfo(undefined)
+           }
+           userStore.setRememberMe(unref(remember))
+-          // 是否使用动态路由
+-          if (appStore.getDynamicRouter) {
+-            getRole()
+-          } else {
+-            await permissionStore.generateRoutes('static').catch(() => {})
+-            permissionStore.getAddRouters.forEach((route) => {
+-              addRoute(route as RouteRecordRaw) // 动态添加可访问路由表
+-            })
+-            permissionStore.setIsAddRouters(true)
+-            push({ path: redirect.value || permissionStore.addRouters[0].path })
+-          }
++          // 路由守卫统一根据路由模式和 effective_permissions 安装可访问路由。
++          push({ path: redirect.value || '/' })
+         }
+       } catch (error: any) {
+         // 后端统一错误消息（如凭据无效）优先；axios 错误对象中提取。
+@@ -318,31 +302,6 @@ const signIn = async () => {
+   })
+ }
+ 
+-// 获取角色信息
+-const getRole = async () => {
+-  const formData = await getFormData<UserLoginType>()
+-  const params = {
+-    roleName: formData.username
+-  }
+-  const res =
+-    appStore.getDynamicRouter && appStore.getServerDynamicRouter
+-      ? await getAdminRoleApi(params)
+-      : await getTestRoleApi(params)
+-  if (res) {
+-    const routers = res.data || []
+-    userStore.setRoleRouters(routers)
+-    appStore.getDynamicRouter && appStore.getServerDynamicRouter
+-      ? await permissionStore.generateRoutes('server', routers).catch(() => {})
+-      : await permissionStore.generateRoutes('frontEnd', routers).catch(() => {})
+-
+-    permissionStore.getAddRouters.forEach((route) => {
+-      addRoute(route as RouteRecordRaw) // 动态添加可访问路由表
+-    })
+-    permissionStore.setIsAddRouters(true)
+-    push({ path: redirect.value || permissionStore.addRouters[0].path })
+-  }
+-}
+-
+ // 去注册页面
+ const toRegister = () => {
+   emit('to-register')
+diff --git a/frontend/src/views/Login/components/RegisterForm.vue b/frontend/src/views/Login/components/RegisterForm.vue
+index c21cf4e..5442475 100644
+--- a/frontend/src/views/Login/components/RegisterForm.vue
++++ b/frontend/src/views/Login/components/RegisterForm.vue
+@@ -8,10 +8,7 @@ import { useValidator } from '@/hooks/web/useValidator'
+ import { BaseButton } from '@/components/Button'
+ import { UserLoginType } from '@/api/login/types'
+ import { useUserStore } from '@/store/modules/user'
+-import { usePermissionStore } from '@/store/modules/permission'
+-import { useAppStore } from '@/store/modules/app'
+ import { useRouter } from 'vue-router'
+-import type { RouteRecordRaw } from 'vue-router'
+ 
+ const emit = defineEmits(['to-login'])
+ 
+@@ -23,10 +20,8 @@ const { t } = useI18n()
+ const { required } = useValidator()
+ 
+ const userStore = useUserStore()
+-const permissionStore = usePermissionStore()
+-const appStore = useAppStore()
+ 
+-const { addRoute, push } = useRouter()
++const { push } = useRouter()
+ 
+ const schema = reactive<FormSchema[]>([
+   {
+@@ -181,17 +176,8 @@ const loginRegister = async () => {
+         const formData = await getFormData<UserLoginType>()
+         const ok = await userStore.register(formData)
+         if (ok) {
+-          // 注册即登录：进入系统（角色/权限路由仍走 Mock）
+-          if (appStore.getDynamicRouter) {
+-            push('/')
+-          } else {
+-            await permissionStore.generateRoutes('static').catch(() => {})
+-            permissionStore.getAddRouters.forEach((route) => {
+-              addRoute(route as RouteRecordRaw)
+-            })
+-            permissionStore.setIsAddRouters(true)
+-            push('/')
+-          }
++          // 路由守卫统一根据路由模式和 effective_permissions 安装可访问路由。
++          push('/')
+         }
+       } catch (error: any) {
+         errorMessage.value =
+diff --git a/frontend/types/router.d.ts b/frontend/types/router.d.ts
+index 32d9447..2c46de6 100644
+--- a/frontend/types/router.d.ts
++++ b/frontend/types/router.d.ts
+@@ -45,6 +45,7 @@ interface RouteMetaCustom extends Record<string | number | symbol, unknown> {
+   noTagsView?: boolean
+   canTo?: boolean
+   permission?: string[]
++  requiredPermission?: import('../src/api/login/types').ManagementPermission
+ }
+ 
+ declare module 'vue-router' {
+diff --git a/backend/cmd/admin-init/main.go b/backend/cmd/admin-init/main.go
+new file mode 100644
+index 0000000..8b70f8e
+--- /dev/null
++++ b/backend/cmd/admin-init/main.go
+@@ -0,0 +1,117 @@
++// Command admin-init grants an existing user an administrative built-in role.
++package main
++
++import (
++	"context"
++	"errors"
++	"flag"
++	"fmt"
++	"io"
++	"os"
++	"strings"
++
++	"github.com/jackc/pgx/v5"
++	"github.com/jackc/pgx/v5/pgxpool"
++
++	"github.com/hdw/vue-element-plus-admin/backend/internal/database/sqlc"
++)
++
++type adminQueries interface {
++	GetUserByUsername(ctx context.Context, username string) (sqlc.GetUserByUsernameRow, error)
++	GetRoleByCode(ctx context.Context, code string) (sqlc.Role, error)
++	InsertUserRole(ctx context.Context, arg sqlc.InsertUserRoleParams) error
++}
++
++type options struct {
++	username string
++	role     string
++}
++
++func main() {
++	os.Exit(run(context.Background(), os.Args[1:], os.Getenv, os.Stdout, os.Stderr))
++}
++
++func run(ctx context.Context, args []string, getenv func(string) string, stdout, stderr io.Writer) int {
++	opts, err := parseOptions(args, stderr)
++	if err != nil {
++		return 2
++	}
++
++	databaseURL := strings.TrimSpace(getenv("DATABASE_URL"))
++	if databaseURL == "" {
++		fmt.Fprintln(stderr, "admin-init: DATABASE_URL is required")
++		return 1
++	}
++
++	pool, err := pgxpool.New(ctx, databaseURL)
++	if err != nil {
++		fmt.Fprintln(stderr, "admin-init: unable to parse DATABASE_URL")
++		return 1
++	}
++	defer pool.Close()
++	if err := pool.Ping(ctx); err != nil {
++		fmt.Fprintln(stderr, "admin-init: unable to connect to database")
++		return 1
++	}
++
++	if err := promote(ctx, sqlc.New(pool), opts.username, opts.role); err != nil {
++		fmt.Fprintf(stderr, "admin-init: %v\n", err)
++		return 1
++	}
++	fmt.Fprintf(stdout, "user %q has role %q\n", opts.username, opts.role)
++	return 0
++}
++
++func parseOptions(args []string, output io.Writer) (options, error) {
++	var opts options
++	flags := flag.NewFlagSet("admin-init", flag.ContinueOnError)
++	flags.SetOutput(output)
++	flags.StringVar(&opts.username, "username", "", "registered username to promote")
++	flags.StringVar(&opts.role, "role", "", "target role: admin or super_admin")
++	if err := flags.Parse(args); err != nil {
++		return options{}, err
++	}
++	if flags.NArg() != 0 {
++		fmt.Fprintln(output, "admin-init: positional arguments are not accepted")
++		return options{}, errors.New("unexpected positional arguments")
++	}
++
++	opts.username = strings.TrimSpace(opts.username)
++	opts.role = strings.TrimSpace(opts.role)
++	if opts.username == "" {
++		fmt.Fprintln(output, "admin-init: --username is required")
++		return options{}, errors.New("username is required")
++	}
++	if opts.role != "admin" && opts.role != "super_admin" {
++		fmt.Fprintln(output, "admin-init: --role must be admin or super_admin")
++		return options{}, errors.New("invalid role")
++	}
++	return opts, nil
++}
++
++func promote(ctx context.Context, q adminQueries, username, roleCode string) error {
++	if roleCode != "admin" && roleCode != "super_admin" {
++		return errors.New("role must be admin or super_admin")
++	}
++
++	user, err := q.GetUserByUsername(ctx, username)
++	if err != nil {
++		if errors.Is(err, pgx.ErrNoRows) {
++			return fmt.Errorf("registered user %q was not found", username)
++		}
++		return fmt.Errorf("look up user: %w", err)
++	}
++
++	role, err := q.GetRoleByCode(ctx, roleCode)
++	if err != nil {
++		if errors.Is(err, pgx.ErrNoRows) {
++			return fmt.Errorf("built-in role %q was not found; run migrations first", roleCode)
++		}
++		return fmt.Errorf("look up role: %w", err)
++	}
++
++	if err := q.InsertUserRole(ctx, sqlc.InsertUserRoleParams{UserID: user.ID, RoleID: role.ID}); err != nil {
++		return fmt.Errorf("grant role: %w", err)
++	}
++	return nil
++}
+diff --git a/backend/cmd/admin-init/main_test.go b/backend/cmd/admin-init/main_test.go
+new file mode 100644
+index 0000000..c2f7d98
+--- /dev/null
++++ b/backend/cmd/admin-init/main_test.go
+@@ -0,0 +1,129 @@
++package main
++
++import (
++	"bytes"
++	"context"
++	"errors"
++	"testing"
++
++	"github.com/jackc/pgx/v5"
++	"github.com/jackc/pgx/v5/pgtype"
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++
++	"github.com/hdw/vue-element-plus-admin/backend/internal/database/sqlc"
++)
++
++type fakeAdminQueries struct {
++	user        sqlc.GetUserByUsernameRow
++	userErr     error
++	role        sqlc.Role
++	roleErr     error
++	insertErr   error
++	assignments map[sqlc.InsertUserRoleParams]struct{}
++	insertCalls int
++}
++
++func (f *fakeAdminQueries) GetUserByUsername(context.Context, string) (sqlc.GetUserByUsernameRow, error) {
++	return f.user, f.userErr
++}
++
++func (f *fakeAdminQueries) GetRoleByCode(context.Context, string) (sqlc.Role, error) {
++	return f.role, f.roleErr
++}
++
++func (f *fakeAdminQueries) InsertUserRole(_ context.Context, arg sqlc.InsertUserRoleParams) error {
++	f.insertCalls++
++	if f.insertErr != nil {
++		return f.insertErr
++	}
++	if f.assignments == nil {
++		f.assignments = make(map[sqlc.InsertUserRoleParams]struct{})
++	}
++	f.assignments[arg] = struct{}{}
++	return nil
++}
++
++func TestParseOptionsAcceptsAdministrativeRoles(t *testing.T) {
++	for _, role := range []string{"admin", "super_admin"} {
++		var output bytes.Buffer
++		opts, err := parseOptions([]string{"--username", "alice", "--role", role}, &output)
++		require.NoError(t, err)
++		assert.Equal(t, options{username: "alice", role: role}, opts)
++		assert.Empty(t, output.String())
++	}
++}
++
++func TestParseOptionsRejectsPasswordFlag(t *testing.T) {
++	var output bytes.Buffer
++	_, err := parseOptions([]string{"--username", "alice", "--role", "admin", "--password", "secret"}, &output)
++	require.Error(t, err)
++	assert.Contains(t, output.String(), "flag provided but not defined: -password")
++}
++
++func TestParseOptionsRejectsInvalidRoleAndMissingUsername(t *testing.T) {
++	var output bytes.Buffer
++	_, err := parseOptions([]string{"--role", "user"}, &output)
++	require.Error(t, err)
++	assert.Contains(t, output.String(), "--username is required")
++
++	output.Reset()
++	_, err = parseOptions([]string{"--username", "alice", "--role", "operator"}, &output)
++	require.Error(t, err)
++	assert.Contains(t, output.String(), "--role must be admin or super_admin")
++}
++
++func TestPromoteRejectsNonAdministrativeRole(t *testing.T) {
++	q := &fakeAdminQueries{}
++
++	err := promote(context.Background(), q, "alice", "user")
++
++	require.Error(t, err)
++	assert.Contains(t, err.Error(), "admin or super_admin")
++	assert.Zero(t, q.insertCalls)
++}
++
++func TestPromoteRequiresRegisteredUser(t *testing.T) {
++	q := &fakeAdminQueries{userErr: pgx.ErrNoRows}
++
++	err := promote(context.Background(), q, "missing", "admin")
++
++	require.Error(t, err)
++	assert.Contains(t, err.Error(), "registered user")
++	assert.Zero(t, q.insertCalls)
++}
++
++func TestPromoteIsIdempotent(t *testing.T) {
++	q := &fakeAdminQueries{
++		user: sqlc.GetUserByUsernameRow{ID: 7, Username: "alice"},
++		role: sqlc.Role{ID: 2, Code: "admin", CreatedAt: pgtype.Timestamptz{}},
++	}
++
++	require.NoError(t, promote(context.Background(), q, "alice", "admin"))
++	require.NoError(t, promote(context.Background(), q, "alice", "admin"))
++
++	assert.Equal(t, 2, q.insertCalls)
++	assert.Len(t, q.assignments, 1, "ON CONFLICT semantics keep one role assignment")
++	_, ok := q.assignments[sqlc.InsertUserRoleParams{UserID: 7, RoleID: 2}]
++	assert.True(t, ok)
++}
++
++func TestPromoteSurfacesDatabaseErrors(t *testing.T) {
++	q := &fakeAdminQueries{userErr: errors.New("database unavailable")}
++
++	err := promote(context.Background(), q, "alice", "admin")
++
++	require.Error(t, err)
++	assert.Contains(t, err.Error(), "look up user")
++}
++
++func TestRunRequiresDatabaseURLBeforeConnecting(t *testing.T) {
++	var stdout, stderr bytes.Buffer
++	exitCode := run(context.Background(), []string{"--username", "alice", "--role", "admin"}, func(string) string {
++		return ""
++	}, &stdout, &stderr)
++
++	assert.Equal(t, 1, exitCode)
++	assert.Empty(t, stdout.String())
++	assert.Contains(t, stderr.String(), "DATABASE_URL is required")
++}
+diff --git a/backend/db/migrations/000005_permissions.down.sql b/backend/db/migrations/000005_permissions.down.sql
+new file mode 100644
+index 0000000..ed9f698
+--- /dev/null
++++ b/backend/db/migrations/000005_permissions.down.sql
+@@ -0,0 +1,3 @@
++-- 000005_permissions.down.sql
++DROP TABLE IF EXISTS role_permissions;
++DROP TABLE IF EXISTS permissions;
+diff --git a/backend/db/migrations/000005_permissions.up.sql b/backend/db/migrations/000005_permissions.up.sql
+new file mode 100644
+index 0000000..e04eeea
+--- /dev/null
++++ b/backend/db/migrations/000005_permissions.up.sql
+@@ -0,0 +1,65 @@
++-- 000005_permissions.up.sql
++-- Permission catalog and role grants for the first authorization closure.
++CREATE TABLE permissions (
++    id         BIGSERIAL PRIMARY KEY,
++    code       TEXT        NOT NULL UNIQUE,
++    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
++    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
++);
++
++CREATE TABLE role_permissions (
++    role_id       BIGINT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
++    permission_id BIGINT NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
++    PRIMARY KEY (role_id, permission_id)
++);
++
++CREATE INDEX idx_role_permissions_permission_id ON role_permissions (permission_id);
++
++INSERT INTO permissions (code) VALUES
++    ('roles.read'),
++    ('roles.write'),
++    ('departments.read'),
++    ('departments.write'),
++    ('users.read'),
++    ('users.write')
++ON CONFLICT (code) DO NOTHING;
++
++-- Before authorization existed, the role API allowed seeded codes to be
++-- renamed or unassigned roles to be deleted. Restore those stable identities
++-- so an existing installation remains bootable and admin-init can recover it.
++DO $$
++BEGIN
++    IF NOT EXISTS (SELECT 1 FROM roles WHERE code = 'super_admin') THEN
++        UPDATE roles SET code = 'super_admin', updated_at = now()
++        WHERE name = '超级管理员';
++        IF NOT FOUND THEN
++            INSERT INTO roles (name, code) VALUES ('超级管理员', 'super_admin');
++        END IF;
++    END IF;
++
++    IF NOT EXISTS (SELECT 1 FROM roles WHERE code = 'admin') THEN
++        UPDATE roles SET code = 'admin', updated_at = now()
++        WHERE name = '管理员';
++        IF NOT FOUND THEN
++            INSERT INTO roles (name, code) VALUES ('管理员', 'admin');
++        END IF;
++    END IF;
++
++    IF NOT EXISTS (SELECT 1 FROM roles WHERE code = 'user') THEN
++        UPDATE roles SET code = 'user', updated_at = now()
++        WHERE name = '普通用户';
++        IF NOT FOUND THEN
++            INSERT INTO roles (name, code) VALUES ('普通用户', 'user');
++        END IF;
++    END IF;
++END
++$$;
++
++-- Both privileged built-in roles receive the complete first-generation catalog.
++-- The built-in user role and all custom roles intentionally receive no grants.
++INSERT INTO role_permissions (role_id, permission_id)
++SELECT r.id, p.id
++FROM roles r
++CROSS JOIN permissions p
++WHERE r.code IN ('admin', 'super_admin')
++ON CONFLICT (role_id, permission_id) DO NOTHING;
+diff --git a/backend/db/queries/permissions.sql b/backend/db/queries/permissions.sql
+new file mode 100644
+index 0000000..14fd973
+--- /dev/null
++++ b/backend/db/queries/permissions.sql
+@@ -0,0 +1,20 @@
++-- permissions.sql
++-- Effective permissions are the distinct union of grants from all user roles.
++
++-- name: ListEffectivePermissionsByUserID :many
++SELECT DISTINCT p.code
++FROM user_roles ur
++JOIN role_permissions rp ON rp.role_id = ur.role_id
++JOIN permissions p ON p.id = rp.permission_id
++WHERE ur.user_id = $1
++ORDER BY p.code;
++
++-- name: HasPermissionByUserID :one
++SELECT EXISTS (
++    SELECT 1
++    FROM user_roles ur
++    JOIN role_permissions rp ON rp.role_id = ur.role_id
++    JOIN permissions p ON p.id = rp.permission_id
++    WHERE ur.user_id = $1
++      AND p.code = $2
++) AS has_permission;
+diff --git a/backend/docs/operations/admin-init.md b/backend/docs/operations/admin-init.md
+new file mode 100644
+index 0000000..c31123a
+--- /dev/null
++++ b/backend/docs/operations/admin-init.md
+@@ -0,0 +1,58 @@
++# Initialize an administrator
++
++Use this procedure only after the target user has registered normally. It does not create users, set passwords, or bypass the normal password hashing and registration flow.
++
++## Preferred: CLI
++
++Run from `backend/` with the migrated database URL in the environment:
++
++```bash
++DATABASE_URL='postgres://...' go run ./cmd/admin-init --username alice --role admin
++```
++
++For the highest built-in role:
++
++```bash
++DATABASE_URL='postgres://...' go run ./cmd/admin-init --username alice --role super_admin
++```
++
++Properties:
++
++- `--role` accepts only `admin` or `super_admin`.
++- The username must already exist in `users`.
++- No password argument is accepted.
++- Repeating the same command is safe; the role grant uses the existing `ON CONFLICT DO NOTHING` query.
++- The command adds the requested role and preserves the user's other role assignments.
++
++After promotion, have the user call `GET /api/v1/auth/me` again. Permission checks query current role grants on every request, so no server restart is required.
++
++## Controlled SQL alternative
++
++Use the CLI when possible. If operational policy requires direct SQL, run the following through `psql` with `ON_ERROR_STOP` enabled. Set `role` to exactly `admin` or `super_admin`.
++
++```sql
++\set ON_ERROR_STOP on
++\set username 'alice'
++\set role 'admin'
++
++BEGIN;
++
++SELECT id AS target_user_id
++FROM users
++WHERE username = :'username'
++\gset
++
++SELECT id AS target_role_id
++FROM roles
++WHERE code = :'role'
++  AND code IN ('admin', 'super_admin')
++\gset
++
++INSERT INTO user_roles (user_id, role_id)
++VALUES (:target_user_id, :target_role_id)
++ON CONFLICT (user_id, role_id) DO NOTHING;
++
++COMMIT;
++```
++
++If the user or built-in role does not exist, `\gset` does not define the required variable and `ON_ERROR_STOP` prevents the grant from continuing. Do not insert directly into `users`, store plaintext passwords, or grant permissions by editing the seeded permission catalog during this operation.
+diff --git a/backend/internal/authorization/service.go b/backend/internal/authorization/service.go
+new file mode 100644
+index 0000000..8f57155
+--- /dev/null
++++ b/backend/internal/authorization/service.go
+@@ -0,0 +1,68 @@
++// Package authorization resolves effective user permissions from role grants.
++package authorization
++
++import (
++	"context"
++	"fmt"
++
++	"github.com/jackc/pgx/v5/pgxpool"
++
++	"github.com/hdw/vue-element-plus-admin/backend/internal/database/sqlc"
++)
++
++// Permission codes enforced by the first-generation management API.
++const (
++	RolesRead        = "roles.read"
++	RolesWrite       = "roles.write"
++	DepartmentsRead  = "departments.read"
++	DepartmentsWrite = "departments.write"
++	UsersRead        = "users.read"
++	UsersWrite       = "users.write"
++)
++
++// Service is the authorization boundary used by handlers and middleware.
++// Implementations must read current grants rather than cache decisions.
++type Service interface {
++	EffectivePermissions(ctx context.Context, userID int64) ([]string, error)
++	HasPermission(ctx context.Context, userID int64, permissionCode string) (bool, error)
++}
++
++type permissionQueries interface {
++	ListEffectivePermissionsByUserID(ctx context.Context, userID int64) ([]string, error)
++	HasPermissionByUserID(ctx context.Context, arg sqlc.HasPermissionByUserIDParams) (bool, error)
++}
++
++// AuthorizationService implements Service with sqlc queries.
++type AuthorizationService struct {
++	q permissionQueries
++}
++
++// NewService creates an authorization service backed by PostgreSQL.
++func NewService(pool *pgxpool.Pool) *AuthorizationService {
++	return &AuthorizationService{q: sqlc.New(pool)}
++}
++
++// EffectivePermissions returns the distinct, sorted union of grants from all
++// current roles. Users without grants receive a non-nil empty slice.
++func (s *AuthorizationService) EffectivePermissions(ctx context.Context, userID int64) ([]string, error) {
++	permissions, err := s.q.ListEffectivePermissionsByUserID(ctx, userID)
++	if err != nil {
++		return nil, fmt.Errorf("list effective permissions: %w", err)
++	}
++	if permissions == nil {
++		return []string{}, nil
++	}
++	return permissions, nil
++}
++
++// HasPermission checks current database grants on every call.
++func (s *AuthorizationService) HasPermission(ctx context.Context, userID int64, permissionCode string) (bool, error) {
++	allowed, err := s.q.HasPermissionByUserID(ctx, sqlc.HasPermissionByUserIDParams{
++		UserID: userID,
++		Code:   permissionCode,
++	})
++	if err != nil {
++		return false, fmt.Errorf("check permission: %w", err)
++	}
++	return allowed, nil
++}
+diff --git a/backend/internal/authorization/service_test.go b/backend/internal/authorization/service_test.go
+new file mode 100644
+index 0000000..51ca1be
+--- /dev/null
++++ b/backend/internal/authorization/service_test.go
+@@ -0,0 +1,93 @@
++package authorization
++
++import (
++	"context"
++	"errors"
++	"testing"
++
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++
++	"github.com/hdw/vue-element-plus-admin/backend/internal/database/sqlc"
++)
++
++type fakePermissionQueries struct {
++	permissions []string
++	listErr     error
++	hasResults  []bool
++	hasErr      error
++	hasCalls    int
++	lastParams  sqlc.HasPermissionByUserIDParams
++}
++
++func (f *fakePermissionQueries) ListEffectivePermissionsByUserID(context.Context, int64) ([]string, error) {
++	return f.permissions, f.listErr
++}
++
++func (f *fakePermissionQueries) HasPermissionByUserID(_ context.Context, arg sqlc.HasPermissionByUserIDParams) (bool, error) {
++	f.lastParams = arg
++	call := f.hasCalls
++	f.hasCalls++
++	if f.hasErr != nil {
++		return false, f.hasErr
++	}
++	if call >= len(f.hasResults) {
++		return false, nil
++	}
++	return f.hasResults[call], nil
++}
++
++func TestEffectivePermissionsReturnsNonNilEmptySlice(t *testing.T) {
++	svc := &AuthorizationService{q: &fakePermissionQueries{permissions: nil}}
++
++	permissions, err := svc.EffectivePermissions(context.Background(), 7)
++
++	require.NoError(t, err)
++	require.NotNil(t, permissions)
++	assert.Empty(t, permissions)
++}
++
++func TestEffectivePermissionsReturnsCurrentGrantSet(t *testing.T) {
++	expected := []string{DepartmentsRead, UsersRead}
++	svc := &AuthorizationService{q: &fakePermissionQueries{permissions: expected}}
++
++	permissions, err := svc.EffectivePermissions(context.Background(), 7)
++
++	require.NoError(t, err)
++	assert.Equal(t, expected, permissions)
++}
++
++func TestEffectivePermissionsWrapsQueryError(t *testing.T) {
++	svc := &AuthorizationService{q: &fakePermissionQueries{listErr: errors.New("database unavailable")}}
++
++	permissions, err := svc.EffectivePermissions(context.Background(), 7)
++
++	assert.Nil(t, permissions)
++	require.Error(t, err)
++	assert.Contains(t, err.Error(), "list effective permissions")
++}
++
++func TestHasPermissionQueriesEveryCall(t *testing.T) {
++	queries := &fakePermissionQueries{hasResults: []bool{false, true}}
++	svc := &AuthorizationService{q: queries}
++
++	allowed, err := svc.HasPermission(context.Background(), 9, RolesWrite)
++	require.NoError(t, err)
++	assert.False(t, allowed)
++
++	allowed, err = svc.HasPermission(context.Background(), 9, RolesWrite)
++	require.NoError(t, err)
++	assert.True(t, allowed)
++	assert.Equal(t, 2, queries.hasCalls, "authorization decisions must not be cached")
++	assert.Equal(t, sqlc.HasPermissionByUserIDParams{UserID: 9, Code: RolesWrite}, queries.lastParams)
++}
++
++func TestHasPermissionWrapsQueryError(t *testing.T) {
++	svc := &AuthorizationService{q: &fakePermissionQueries{hasErr: errors.New("database unavailable")}}
++
++	allowed, err := svc.HasPermission(context.Background(), 9, UsersRead)
++
++	assert.False(t, allowed)
++	require.Error(t, err)
++	assert.Contains(t, err.Error(), "check permission")
++}
+diff --git a/backend/internal/database/sqlc/permissions.sql.go b/backend/internal/database/sqlc/permissions.sql.go
+new file mode 100644
+index 0000000..a9d484e
+--- /dev/null
++++ b/backend/internal/database/sqlc/permissions.sql.go
+@@ -0,0 +1,65 @@
++// Code generated by sqlc. DO NOT EDIT.
++// versions:
++//   sqlc v1.31.1
++// source: permissions.sql
++
++package sqlc
++
++import (
++	"context"
++)
++
++const hasPermissionByUserID = `-- name: HasPermissionByUserID :one
++SELECT EXISTS (
++    SELECT 1
++    FROM user_roles ur
++    JOIN role_permissions rp ON rp.role_id = ur.role_id
++    JOIN permissions p ON p.id = rp.permission_id
++    WHERE ur.user_id = $1
++      AND p.code = $2
++) AS has_permission
++`
++
++type HasPermissionByUserIDParams struct {
++	UserID int64  `json:"user_id"`
++	Code   string `json:"code"`
++}
++
++func (q *Queries) HasPermissionByUserID(ctx context.Context, arg HasPermissionByUserIDParams) (bool, error) {
++	row := q.db.QueryRow(ctx, hasPermissionByUserID, arg.UserID, arg.Code)
++	var has_permission bool
++	err := row.Scan(&has_permission)
++	return has_permission, err
++}
++
++const listEffectivePermissionsByUserID = `-- name: ListEffectivePermissionsByUserID :many
++
++SELECT DISTINCT p.code
++FROM user_roles ur
++JOIN role_permissions rp ON rp.role_id = ur.role_id
++JOIN permissions p ON p.id = rp.permission_id
++WHERE ur.user_id = $1
++ORDER BY p.code
++`
++
++// permissions.sql
++// Effective permissions are the distinct union of grants from all user roles.
++func (q *Queries) ListEffectivePermissionsByUserID(ctx context.Context, userID int64) ([]string, error) {
++	rows, err := q.db.Query(ctx, listEffectivePermissionsByUserID, userID)
++	if err != nil {
++		return nil, err
++	}
++	defer rows.Close()
++	items := []string{}
++	for rows.Next() {
++		var code string
++		if err := rows.Scan(&code); err != nil {
++			return nil, err
++		}
++		items = append(items, code)
++	}
++	if err := rows.Err(); err != nil {
++		return nil, err
++	}
++	return items, nil
++}
+diff --git a/backend/internal/middleware/authorization.go b/backend/internal/middleware/authorization.go
+new file mode 100644
+index 0000000..f0f08ed
+--- /dev/null
++++ b/backend/internal/middleware/authorization.go
+@@ -0,0 +1,50 @@
++package middleware
++
++import (
++	"net/http"
++
++	"github.com/gin-gonic/gin"
++
++	"github.com/hdw/vue-element-plus-admin/backend/internal/auth"
++	"github.com/hdw/vue-element-plus-admin/backend/internal/authorization"
++)
++
++// RequirePermission allows a request only when the authenticated principal has
++// the requested permission in the current database state. It must run after Auth.
++func RequirePermission(svc authorization.Service, permissionCode string) gin.HandlerFunc {
++	return func(c *gin.Context) {
++		value, ok := c.Get(auth.ContextAuthUser)
++		principal, valid := value.(*auth.AuthUser)
++		if !ok || !valid || principal == nil {
++			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
++				"error": gin.H{
++					"code":    "AUTH_INVALID_TOKEN",
++					"message": "缺少或无效的认证用户",
++				},
++			})
++			return
++		}
++
++		allowed, err := svc.HasPermission(c.Request.Context(), principal.ID, permissionCode)
++		if err != nil {
++			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
++				"error": gin.H{
++					"code":    "INTERNAL_ERROR",
++					"message": "内部错误",
++				},
++			})
++			return
++		}
++		if !allowed {
++			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
++				"error": gin.H{
++					"code":    "AUTH_FORBIDDEN",
++					"message": "无权执行此操作",
++				},
++			})
++			return
++		}
++
++		c.Next()
++	}
++}
+diff --git a/backend/internal/middleware/authorization_test.go b/backend/internal/middleware/authorization_test.go
+new file mode 100644
+index 0000000..debd211
+--- /dev/null
++++ b/backend/internal/middleware/authorization_test.go
+@@ -0,0 +1,120 @@
++package middleware
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"net/http"
++	"net/http/httptest"
++	"testing"
++
++	"github.com/gin-gonic/gin"
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++
++	"github.com/hdw/vue-element-plus-admin/backend/internal/auth"
++	"github.com/hdw/vue-element-plus-admin/backend/internal/authorization"
++)
++
++type fakeAuthorizationService struct {
++	allowed        bool
++	err            error
++	userID         int64
++	permissionCode string
++	calls          int
++}
++
++func (f *fakeAuthorizationService) EffectivePermissions(context.Context, int64) ([]string, error) {
++	return []string{}, nil
++}
++
++func (f *fakeAuthorizationService) HasPermission(_ context.Context, userID int64, permissionCode string) (bool, error) {
++	f.calls++
++	f.userID = userID
++	f.permissionCode = permissionCode
++	return f.allowed, f.err
++}
++
++func permissionRouter(svc authorization.Service, injectPrincipal bool, reached *bool) *gin.Engine {
++	router := gin.New()
++	router.GET("/protected", func(c *gin.Context) {
++		if injectPrincipal {
++			c.Set(auth.ContextAuthUser, &auth.AuthUser{ID: 42, Username: "alice"})
++		}
++		c.Next()
++	}, RequirePermission(svc, authorization.UsersRead), func(c *gin.Context) {
++		*reached = true
++		c.JSON(http.StatusOK, gin.H{"data": gin.H{}})
++	})
++	return router
++}
++
++func errorCode(t *testing.T, recorder *httptest.ResponseRecorder) string {
++	t.Helper()
++	var envelope struct {
++		Error struct {
++			Code string `json:"code"`
++		} `json:"error"`
++	}
++	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &envelope))
++	return envelope.Error.Code
++}
++
++func TestRequirePermissionAllowsAuthorizedPrincipal(t *testing.T) {
++	svc := &fakeAuthorizationService{allowed: true}
++	reached := false
++	router := permissionRouter(svc, true, &reached)
++
++	request := httptest.NewRequest(http.MethodGet, "/protected", nil)
++	response := httptest.NewRecorder()
++	router.ServeHTTP(response, request)
++
++	assert.Equal(t, http.StatusOK, response.Code)
++	assert.True(t, reached)
++	assert.Equal(t, 1, svc.calls)
++	assert.Equal(t, int64(42), svc.userID)
++	assert.Equal(t, authorization.UsersRead, svc.permissionCode)
++}
++
++func TestRequirePermissionRejectsMissingPrincipal(t *testing.T) {
++	svc := &fakeAuthorizationService{allowed: true}
++	reached := false
++	router := permissionRouter(svc, false, &reached)
++
++	request := httptest.NewRequest(http.MethodGet, "/protected", nil)
++	response := httptest.NewRecorder()
++	router.ServeHTTP(response, request)
++
++	assert.Equal(t, http.StatusUnauthorized, response.Code)
++	assert.Equal(t, "AUTH_INVALID_TOKEN", errorCode(t, response))
++	assert.False(t, reached)
++	assert.Zero(t, svc.calls)
++}
++
++func TestRequirePermissionRejectsDeniedPrincipal(t *testing.T) {
++	svc := &fakeAuthorizationService{allowed: false}
++	reached := false
++	router := permissionRouter(svc, true, &reached)
++
++	request := httptest.NewRequest(http.MethodGet, "/protected", nil)
++	response := httptest.NewRecorder()
++	router.ServeHTTP(response, request)
++
++	assert.Equal(t, http.StatusForbidden, response.Code)
++	assert.Equal(t, "AUTH_FORBIDDEN", errorCode(t, response))
++	assert.False(t, reached)
++}
++
++func TestRequirePermissionReturnsInternalEnvelopeOnQueryFailure(t *testing.T) {
++	svc := &fakeAuthorizationService{err: errors.New("database unavailable")}
++	reached := false
++	router := permissionRouter(svc, true, &reached)
++
++	request := httptest.NewRequest(http.MethodGet, "/protected", nil)
++	response := httptest.NewRecorder()
++	router.ServeHTTP(response, request)
++
++	assert.Equal(t, http.StatusInternalServerError, response.Code)
++	assert.Equal(t, "INTERNAL_ERROR", errorCode(t, response))
++	assert.False(t, reached)
++}
+diff --git a/backend/internal/rbac/routes.go b/backend/internal/rbac/routes.go
+new file mode 100644
+index 0000000..70f2da1
+--- /dev/null
++++ b/backend/internal/rbac/routes.go
+@@ -0,0 +1,24 @@
++package rbac
++
++import (
++	"github.com/gin-gonic/gin"
++
++	"github.com/hdw/vue-element-plus-admin/backend/internal/authorization"
++	"github.com/hdw/vue-element-plus-admin/backend/internal/middleware"
++)
++
++// RegisterRoutes binds the nine management endpoints to their required
++// read/write permissions. Authentication is applied by the caller's group.
++func RegisterRoutes(group *gin.RouterGroup, handler *Handler, authorizationSvc authorization.Service) {
++	group.GET("/roles", middleware.RequirePermission(authorizationSvc, authorization.RolesRead), handler.ListRoles)
++	group.POST("/roles", middleware.RequirePermission(authorizationSvc, authorization.RolesWrite), handler.SaveRole)
++	group.POST("/roles/delete", middleware.RequirePermission(authorizationSvc, authorization.RolesWrite), handler.DeleteRoles)
++
++	group.GET("/departments", middleware.RequirePermission(authorizationSvc, authorization.DepartmentsRead), handler.ListDepartments)
++	group.POST("/departments", middleware.RequirePermission(authorizationSvc, authorization.DepartmentsWrite), handler.SaveDepartment)
++	group.POST("/departments/delete", middleware.RequirePermission(authorizationSvc, authorization.DepartmentsWrite), handler.DeleteDepartments)
++
++	group.GET("/users", middleware.RequirePermission(authorizationSvc, authorization.UsersRead), handler.ListUsers)
++	group.POST("/users", middleware.RequirePermission(authorizationSvc, authorization.UsersWrite), handler.SaveUser)
++	group.POST("/users/delete", middleware.RequirePermission(authorizationSvc, authorization.UsersWrite), handler.DeleteUsers)
++}
+diff --git a/backend/internal/rbac/routes_test.go b/backend/internal/rbac/routes_test.go
+new file mode 100644
+index 0000000..7125609
+--- /dev/null
++++ b/backend/internal/rbac/routes_test.go
+@@ -0,0 +1,93 @@
++package rbac
++
++import (
++	"bytes"
++	"context"
++	"log/slog"
++	"net/http"
++	"net/http/httptest"
++	"os"
++	"testing"
++
++	"github.com/gin-gonic/gin"
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++
++	"github.com/hdw/vue-element-plus-admin/backend/internal/auth"
++	"github.com/hdw/vue-element-plus-admin/backend/internal/authorization"
++)
++
++type routeAuthorization struct {
++	allowedPermission string
++	seenPermission    string
++}
++
++func (r *routeAuthorization) EffectivePermissions(context.Context, int64) ([]string, error) {
++	return []string{}, nil
++}
++
++func (r *routeAuthorization) HasPermission(_ context.Context, _ int64, permissionCode string) (bool, error) {
++	r.seenPermission = permissionCode
++	return permissionCode == r.allowedPermission, nil
++}
++
++func TestRegisterRoutesBindsEndpointPermissions(t *testing.T) {
++	tests := []struct {
++		name       string
++		method     string
++		path       string
++		body       string
++		permission string
++	}{
++		{name: "list roles", method: http.MethodGet, path: "/api/v1/roles", permission: authorization.RolesRead},
++		{name: "save role", method: http.MethodPost, path: "/api/v1/roles", body: `{"name":"运营","code":"operator"}`, permission: authorization.RolesWrite},
++		{name: "delete roles", method: http.MethodPost, path: "/api/v1/roles/delete", body: `{"ids":[9]}`, permission: authorization.RolesWrite},
++		{name: "list departments", method: http.MethodGet, path: "/api/v1/departments", permission: authorization.DepartmentsRead},
++		{name: "save department", method: http.MethodPost, path: "/api/v1/departments", body: `{"name":"测试部"}`, permission: authorization.DepartmentsWrite},
++		{name: "delete departments", method: http.MethodPost, path: "/api/v1/departments/delete", body: `{"ids":[9]}`, permission: authorization.DepartmentsWrite},
++		{name: "list users", method: http.MethodGet, path: "/api/v1/users", permission: authorization.UsersRead},
++		{name: "save user", method: http.MethodPost, path: "/api/v1/users", body: `{"username":"test_user","password":"password-123"}`, permission: authorization.UsersWrite},
++		{name: "delete users", method: http.MethodPost, path: "/api/v1/users/delete", body: `{"ids":[9]}`, permission: authorization.UsersWrite},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			authorizer := &routeAuthorization{allowedPermission: tt.permission}
++			handler := NewHandler(&mockService{}, slog.New(slog.NewTextHandler(os.Stderr, nil)))
++			router := gin.New()
++			router.Use(func(c *gin.Context) {
++				c.Set(auth.ContextAuthUser, &auth.AuthUser{ID: 1, Username: "admin"})
++				c.Next()
++			})
++			RegisterRoutes(router.Group("/api/v1"), handler, authorizer)
++
++			request := httptest.NewRequest(tt.method, tt.path, bytes.NewBufferString(tt.body))
++			request.Header.Set("Content-Type", "application/json")
++			response := httptest.NewRecorder()
++			router.ServeHTTP(response, request)
++
++			require.Equal(t, http.StatusOK, response.Code)
++			assert.Equal(t, tt.permission, authorizer.seenPermission)
++		})
++	}
++}
++
++func TestRegisterRoutesDeniesMissingEndpointPermission(t *testing.T) {
++	authorizer := &routeAuthorization{allowedPermission: authorization.UsersRead}
++	handler := NewHandler(&mockService{}, slog.New(slog.NewTextHandler(os.Stderr, nil)))
++	router := gin.New()
++	router.Use(func(c *gin.Context) {
++		c.Set(auth.ContextAuthUser, &auth.AuthUser{ID: 1, Username: "reader"})
++		c.Next()
++	})
++	RegisterRoutes(router.Group("/api/v1"), handler, authorizer)
++
++	request := httptest.NewRequest(http.MethodPost, "/api/v1/users/delete", bytes.NewBufferString(`{"ids":[9]}`))
++	request.Header.Set("Content-Type", "application/json")
++	response := httptest.NewRecorder()
++	router.ServeHTTP(response, request)
++
++	assert.Equal(t, http.StatusForbidden, response.Code)
++	assert.Contains(t, response.Body.String(), "AUTH_FORBIDDEN")
++	assert.Equal(t, authorization.UsersWrite, authorizer.seenPermission)
++}
+diff --git a/frontend/scripts/access-control.test.ts b/frontend/scripts/access-control.test.ts
+new file mode 100644
+index 0000000..d7f706c
+--- /dev/null
++++ b/frontend/scripts/access-control.test.ts
+@@ -0,0 +1,61 @@
++import assert from 'node:assert/strict'
++import { filterRoutesByPermissions, hasEffectivePermission } from '../src/utils/accessControl'
++
++const authorizationRoutes = [
++  {
++    path: '/authorization',
++    name: 'Authorization',
++    redirect: '/authorization/user',
++    meta: {},
++    children: [
++      {
++        path: 'department',
++        name: 'Department',
++        meta: { requiredPermission: 'departments.read' }
++      },
++      {
++        path: 'user',
++        name: 'User',
++        meta: { requiredPermission: 'users.read' }
++      },
++      {
++        path: 'role',
++        name: 'Role',
++        meta: { requiredPermission: 'roles.read' }
++      }
++    ]
++  }
++] as AppRouteRecordRaw[]
++
++assert.equal(hasEffectivePermission(['users.read'], 'users.read'), true)
++assert.equal(hasEffectivePermission([], 'users.read'), false)
++
++const userOnly = filterRoutesByPermissions(authorizationRoutes, ['users.read'])
++assert.equal(userOnly.length, 1)
++assert.deepEqual(
++  userOnly[0].children?.map((route) => route.name),
++  ['User']
++)
++assert.equal(userOnly[0].redirect, '/authorization/user')
++
++const roleOnly = filterRoutesByPermissions(authorizationRoutes, ['roles.read'])
++assert.deepEqual(
++  roleOnly[0].children?.map((route) => route.name),
++  ['Role']
++)
++assert.equal(roleOnly[0].redirect, '/authorization/role')
++
++assert.deepEqual(filterRoutesByPermissions(authorizationRoutes, []), [])
++assert.equal(authorizationRoutes[0].children?.length, 3)
++
++const demoRoutes = [
++  {
++    path: '/demo',
++    name: 'Demo',
++    meta: {},
++    children: [{ path: 'dashboard', name: 'Dashboard', meta: {} }]
++  }
++] as AppRouteRecordRaw[]
++assert.equal(filterRoutesByPermissions(demoRoutes, []).length, 1)
++
++console.log('access-control tests passed')
+diff --git a/frontend/src/utils/accessControl.ts b/frontend/src/utils/accessControl.ts
+new file mode 100644
+index 0000000..1acd4ba
+--- /dev/null
++++ b/frontend/src/utils/accessControl.ts
+@@ -0,0 +1,60 @@
++import type { ManagementPermission } from '@/api/login/types'
++
++const resolveRoutePath = (parentPath: string, path: string): string => {
++  if (/^(https?:)?\/\//.test(path)) return path
++  const childPath = path.startsWith('/') || !path ? path : `/${path}`
++  return `${parentPath}${childPath}`.replace(/\/\//g, '/').trim()
++}
++
++export const MANAGEMENT_PERMISSIONS: readonly ManagementPermission[] = [
++  'roles.read',
++  'roles.write',
++  'departments.read',
++  'departments.write',
++  'users.read',
++  'users.write'
++]
++
++const managementPermissionSet = new Set<string>(MANAGEMENT_PERMISSIONS)
++
++export const isManagementPermission = (permission: string): permission is ManagementPermission => {
++  return managementPermissionSet.has(permission)
++}
++
++export const hasEffectivePermission = (granted: readonly string[], required: string): boolean => {
++  return granted.includes(required)
++}
++
++export const filterRoutesByPermissions = (
++  routes: AppRouteRecordRaw[],
++  granted: readonly string[],
++  basePath = '/'
++): AppRouteRecordRaw[] => {
++  return routes.flatMap((route) => {
++    const required = route.meta?.requiredPermission
++    if (required && !hasEffectivePermission(granted, required)) {
++      return []
++    }
++
++    const data: AppRouteRecordRaw = { ...route, meta: { ...route.meta } }
++    const routePath = resolveRoutePath(basePath, route.path)
++
++    if (route.children) {
++      data.children = filterRoutesByPermissions(route.children, granted, routePath)
++      if (route.children.length > 0 && data.children.length === 0) {
++        return []
++      }
++
++      if (typeof data.redirect === 'string' && data.children.length > 0) {
++        const redirectStillAvailable = data.children.some(
++          (child) => resolveRoutePath(routePath, child.path) === data.redirect
++        )
++        if (!redirectStillAvailable) {
++          data.redirect = resolveRoutePath(routePath, data.children[0].path)
++        }
++      }
++    }
++
++    return [data]
++  })
++}
