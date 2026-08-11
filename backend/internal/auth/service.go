@@ -1,3 +1,5 @@
+//go:build rollback
+
 package auth
 
 import (
@@ -11,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/hdw/vue-element-plus-admin/backend/internal/authorization"
 	"github.com/hdw/vue-element-plus-admin/backend/internal/database/sqlc"
 )
 
@@ -50,13 +53,14 @@ type RoleProfile struct {
 
 // UserProfile is the extended /auth/me payload: user + department + roles.
 type UserProfile struct {
-	ID         int64              `json:"id"`
-	Username   string             `json:"username"`
-	Account    string             `json:"account"`
-	Email      string             `json:"email"`
-	CreatedAt  time.Time          `json:"created_at"`
-	Department *DepartmentProfile `json:"department"`
-	Roles      []RoleProfile      `json:"roles"`
+	ID                   int64              `json:"id"`
+	Username             string             `json:"username"`
+	Account              string             `json:"account"`
+	Email                string             `json:"email"`
+	CreatedAt            time.Time          `json:"created_at"`
+	Department           *DepartmentProfile `json:"department"`
+	Roles                []RoleProfile      `json:"roles"`
+	EffectivePermissions []string           `json:"effective_permissions"`
 }
 
 // Service is the auth business logic boundary (independent, testable service layer).
@@ -70,8 +74,9 @@ type Service interface {
 
 // AuthService implements Service against PostgreSQL via sqlc.
 type AuthService struct {
-	pool *pgxpool.Pool
-	q    sqlc.Querier
+	pool          *pgxpool.Pool
+	q             sqlc.Querier
+	authorization authorization.Service
 }
 
 // dummyHash is used to burn a comparable amount of work when a login targets
@@ -84,10 +89,15 @@ var dummyHash = func() string {
 	return h
 }()
 
-// NewAuthService creates an AuthService.
-// q may be nil; when nil, the pool is used to derive queries per call.
+// NewAuthService creates an AuthService with database-backed authorization.
 func NewAuthService(pool *pgxpool.Pool) *AuthService {
-	return &AuthService{pool: pool, q: sqlc.New(pool)}
+	return NewAuthServiceWithAuthorization(pool, authorization.NewService(pool))
+}
+
+// NewAuthServiceWithAuthorization creates an AuthService using the supplied
+// authorization service. Server wiring uses this to share one authorization boundary.
+func NewAuthServiceWithAuthorization(pool *pgxpool.Pool, authorizationSvc authorization.Service) *AuthService {
+	return &AuthService{pool: pool, q: sqlc.New(pool), authorization: authorizationSvc}
 }
 
 // Register creates a new user and a session in a single transaction, then
@@ -295,6 +305,12 @@ func (s *AuthService) GetUserProfile(ctx context.Context, userID int64) (*UserPr
 	for _, r := range roles {
 		profile.Roles = append(profile.Roles, RoleProfile{ID: r.ID, Name: r.Name, Code: r.Code})
 	}
+
+	permissions, err := s.authorization.EffectivePermissions(ctx, u.ID)
+	if err != nil {
+		return nil, fmt.Errorf("get effective permissions: %w", err)
+	}
+	profile.EffectivePermissions = permissions
 	return profile, nil
 }
 

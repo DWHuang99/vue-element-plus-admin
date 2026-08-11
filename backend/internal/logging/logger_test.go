@@ -135,3 +135,36 @@ func TestCaptureHelper(t *testing.T) {
 		assert.NotContains(t, "source", s) // sanity check on our test strings
 	}
 }
+
+// TestWithModule_CarriesModuleServiceAttrs (T072): a scoped logger stamps
+// every line with module and service; the base logger is untouched.
+func TestWithModule_CarriesModuleServiceAttrs(t *testing.T) {
+	var buf bytes.Buffer
+	base := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	scoped := WithModule(base, "iam", "service")
+	scoped.Info("port call", "op", "DeleteUsers")
+
+	out := buf.String()
+	assert.Contains(t, out, "module=iam")
+	assert.Contains(t, out, "service=service")
+	assert.Contains(t, out, "op=DeleteUsers")
+
+	// Base logger is a separate child: emitting through it adds no attrs.
+	buf.Reset()
+	base.Info("plain")
+	out = buf.String()
+	assert.NotContains(t, out, "module=")
+	assert.NotContains(t, out, "service=")
+}
+
+// TestWithModule_DoesNotAlterParentHandler: the scoped logger shares the
+// parent handler — level config and output target stay identical.
+func TestWithModule_DoesNotAlterParentHandler(t *testing.T) {
+	var buf bytes.Buffer
+	base := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	scoped := WithModule(base, "organization", "service")
+	scoped.Debug("hidden") // below the shared Warn level
+	assert.Empty(t, buf.String())
+}

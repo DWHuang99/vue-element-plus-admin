@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"regexp"
+
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
@@ -12,14 +14,29 @@ const (
 	ResponseTimeHeader = "X-Response-Time"
 )
 
-// RequestID returns a Gin middleware that injects a request ID into every request.
-// If the client provides a request ID via X-Request-Id header, it is preserved.
-// Otherwise, a new UUID v4 is generated.
-// The request ID is added to both the request context and the response header.
+// requestIDRe is the restricted request-ID charset (T073, research.md
+// Decision 13): the same bounded language as the envelope v1 correlation
+// charset (internal/integration/event.go correlationRe), so any accepted
+// request ID can flow through OperationContext into an outbox event
+// untouched. Client-supplied values outside this set are discarded and
+// regenerated — never echoed into logs, responses or stored rows.
+var requestIDRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+
+// ValidRequestID reports whether id fits the restricted request-ID charset.
+func ValidRequestID(id string) bool {
+	return requestIDRe.MatchString(id)
+}
+
+// RequestID returns a Gin middleware that injects a request ID into every
+// request. A client-provided X-Request-Id is preserved only when it fits the
+// restricted charset; otherwise (absent or invalid) a fresh UUID v4 is
+// generated. The request ID is never derived from the token or any other
+// credential material — it is opaque correlation context only. It is added
+// to both the request context and the response header.
 func RequestID() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		requestID := c.GetHeader(RequestIDHeader)
-		if requestID == "" {
+		if !ValidRequestID(requestID) {
 			requestID = uuid.New().String()
 		}
 

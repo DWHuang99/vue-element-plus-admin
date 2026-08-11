@@ -84,7 +84,7 @@ func swapDB(dbname string) string {
 
 func TestRBAC_TablesCreated(t *testing.T) {
 	ctx := context.Background()
-	for _, table := range []string{"departments", "roles", "user_roles"} {
+	for _, table := range []string{"departments", "roles", "user_roles", "permissions", "role_permissions"} {
 		var exists bool
 		err := testConn.QueryRow(ctx,
 			"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1)",
@@ -128,6 +128,56 @@ func TestRBAC_SeedData(t *testing.T) {
 	assert.Equal(t, 2, children, "研发部 should have 前端组 and 后端组 children")
 }
 
+func TestPermissions_SeedData(t *testing.T) {
+	ctx := context.Background()
+	expected := []string{
+		"departments.read",
+		"departments.write",
+		"roles.read",
+		"roles.write",
+		"users.read",
+		"users.write",
+	}
+
+	rows, err := testConn.Query(ctx, `SELECT code FROM permissions ORDER BY code`)
+	require.NoError(t, err)
+	defer rows.Close()
+	var codes []string
+	for rows.Next() {
+		var code string
+		require.NoError(t, rows.Scan(&code))
+		codes = append(codes, code)
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, expected, codes)
+
+	for _, roleCode := range []string{"admin", "super_admin"} {
+		var count int
+		require.NoError(t, testConn.QueryRow(ctx, `
+			SELECT count(*)
+			FROM role_permissions rp
+			JOIN roles r ON r.id = rp.role_id
+			WHERE r.code = $1`, roleCode).Scan(&count))
+		assert.Equal(t, 6, count, "role %s should receive all permissions", roleCode)
+	}
+
+	var userCount int
+	require.NoError(t, testConn.QueryRow(ctx, `
+		SELECT count(*)
+		FROM role_permissions rp
+		JOIN roles r ON r.id = rp.role_id
+		WHERE r.code = 'user'`).Scan(&userCount))
+	assert.Zero(t, userCount, "the built-in user role should have no permissions")
+
+	var customRoleID int64
+	require.NoError(t, testConn.QueryRow(ctx,
+		`INSERT INTO roles (name, code) VALUES ('迁移测试自定义角色', 'migration_custom') RETURNING id`).Scan(&customRoleID))
+	var customCount int
+	require.NoError(t, testConn.QueryRow(ctx,
+		`SELECT count(*) FROM role_permissions WHERE role_id = $1`, customRoleID).Scan(&customCount))
+	assert.Zero(t, customCount, "new custom roles should not receive implicit permissions")
+}
+
 func TestRBAC_UniqueConstraints(t *testing.T) {
 	ctx := context.Background()
 
@@ -158,12 +208,12 @@ func TestRBAC_FKConstraints(t *testing.T) {
 	// role FK: use a real user with a nonexistent role id.
 	var uid int64
 	require.NoError(t, testConn.QueryRow(ctx,
-		`INSERT INTO users (username, password_hash) VALUES ('fk_role_user', 'x') RETURNING id`).Scan(&uid))
+		`INSERT INTO users (username, password_hash, lifecycle_state, version) VALUES ('fk_role_user', 'x', 'active', 1) RETURNING id`).Scan(&uid))
 	_, err = testConn.Exec(ctx, `INSERT INTO user_roles (user_id, role_id) VALUES ($1, 999999)`, uid)
 	require.Error(t, err, "user_roles must reject unknown role")
 
 	// users.department_id requires an existing department.
-	_, err = testConn.Exec(ctx, `INSERT INTO users (username, password_hash, department_id) VALUES ('fk_test_user', 'x', 999999)`)
+	_, err = testConn.Exec(ctx, `INSERT INTO users (username, password_hash, department_id, lifecycle_state, version) VALUES ('fk_test_user', 'x', 999999, 'active', 1)`)
 	require.Error(t, err, "users.department_id must reject unknown department")
 }
 
@@ -173,7 +223,7 @@ func TestRBAC_CascadeDeleteUser(t *testing.T) {
 	// Create a user + role link, then delete the user and expect the link to cascade.
 	var uid int64
 	require.NoError(t, testConn.QueryRow(ctx,
-		`INSERT INTO users (username, password_hash) VALUES ('cascade_user', 'x') RETURNING id`).Scan(&uid))
+		`INSERT INTO users (username, password_hash, lifecycle_state, version) VALUES ('cascade_user', 'x', 'active', 1) RETURNING id`).Scan(&uid))
 
 	var rid int64
 	require.NoError(t, testConn.QueryRow(ctx, `SELECT id FROM roles WHERE code = 'user'`).Scan(&rid))
@@ -189,10 +239,70 @@ func TestRBAC_CascadeDeleteUser(t *testing.T) {
 	assert.Zero(t, n, "user_roles row must cascade-delete with user")
 }
 
+// TestPermissionsMigrationUpAndDown verifies 000005 applies cleanly and its
+// rollback removes only permission tables while preserving the RBAC schema.
+func TestPermissionsMigrationUpAndDown(t *testing.T) {
+	ctx := context.Background()
+
+	_, err := testConn.Exec(ctx, `CREATE DATABASE scaffold_permissions_migration`)
+	require.NoError(t, err)
+	defer func() {
+		_, _ = testConn.Exec(ctx, `DROP DATABASE scaffold_permissions_migration WITH (FORCE)`)
+	}()
+
+	databaseURL := swapDB("scaffold_permissions_migration")
+	src, err := iofs.New(migrations.FS, ".")
+	require.NoError(t, err)
+	migrator, err := migrate.NewWithSourceInstance("iofs", src, databaseURL)
+	require.NoError(t, err)
+	defer migrator.Close()
+
+	require.NoError(t, migrator.Migrate(4))
+
+	conn, err := pgx.Connect(ctx, databaseURL)
+	require.NoError(t, err)
+	defer conn.Close(ctx)
+
+	// Simulate a legitimate pre-authorization installation where mutable seeded
+	// roles were renamed or deleted. 000005 must restore canonical identities.
+	_, err = conn.Exec(ctx, `UPDATE roles SET code = 'legacy_admin' WHERE code = 'admin'`)
+	require.NoError(t, err)
+	_, err = conn.Exec(ctx, `DELETE FROM roles WHERE code = 'super_admin'`)
+	require.NoError(t, err)
+
+	require.NoError(t, migrator.Steps(1))
+
+	var builtinCount int
+	require.NoError(t, conn.QueryRow(ctx,
+		`SELECT count(*) FROM roles WHERE code IN ('super_admin', 'admin', 'user')`).Scan(&builtinCount))
+	assert.Equal(t, 3, builtinCount)
+
+	var permissionCount int
+	require.NoError(t, conn.QueryRow(ctx, `SELECT count(*) FROM permissions`).Scan(&permissionCount))
+	assert.Equal(t, 6, permissionCount)
+
+	require.NoError(t, migrator.Steps(-1))
+	var permissionsExist bool
+	require.NoError(t, conn.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.tables
+			WHERE table_schema = 'public' AND table_name = 'permissions'
+		)`).Scan(&permissionsExist))
+	assert.False(t, permissionsExist)
+
+	var rolesExist bool
+	require.NoError(t, conn.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.tables
+			WHERE table_schema = 'public' AND table_name = 'roles'
+		)`).Scan(&rolesExist))
+	assert.True(t, rolesExist, "rolling back 000005 must preserve the RBAC schema")
+}
+
 // TestRBAC_DefaultRoleForExistingUsers verifies the seed that assigns the
 // default 'user' role to users created before migration 000004 ran.
 // It runs on a dedicated database: migrate to 000003, insert a user, then
-// apply 000004 and assert the user gained the default role.
+// apply all remaining migrations and assert the user gained the default role.
 func TestRBAC_DefaultRoleForExistingUsers(t *testing.T) {
 	ctx := context.Background()
 

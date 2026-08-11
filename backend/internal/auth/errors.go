@@ -1,3 +1,5 @@
+//go:build rollback
+
 package auth
 
 import "errors"

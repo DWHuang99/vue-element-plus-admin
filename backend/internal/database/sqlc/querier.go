@@ -11,23 +11,38 @@ import (
 )
 
 type Querier interface {
+	ApproveRouteDisable(ctx context.Context, arg ApproveRouteDisableParams) (int64, error)
 	CountDepartmentsByParentID(ctx context.Context, parentID pgtype.Int8) (int64, error)
 	CountUserRolesByRoleID(ctx context.Context, roleID int64) (int64, error)
 	CountUsersByDepartment(ctx context.Context, arg CountUsersByDepartmentParams) (int64, error)
+	// Delete protection counts Organization-owned memberships (data-model.md:
+	// Organization SQL must not read the IAM users table). The bridge keeps these
+	// state rows 1:1 with users during the compatibility window.
 	CountUsersByDepartmentID(ctx context.Context, departmentID pgtype.Int8) (int64, error)
 	CreateDepartment(ctx context.Context, arg CreateDepartmentParams) (Department, error)
 	// users_rbac.sql
 	// User-management queries: create/update/delete users, paginated listing,
 	// and the user<->role join. Query names avoid colliding with the existing
 	// auth-focused CreateUser / GetUserByUsername / GetUserByID.
+	// 000006 dropped the temporary lifecycle defaults; admin-created users state
+	// active explicitly and create version 1 (data-model.md User invariants).
 	CreateRbacUser(ctx context.Context, arg CreateRbacUserParams) (CreateRbacUserRow, error)
 	CreateRole(ctx context.Context, arg CreateRoleParams) (Role, error)
 	CreateSession(ctx context.Context, arg CreateSessionParams) (Session, error)
+	// 000006 dropped the temporary lifecycle defaults; registration states active
+	// explicitly and creates version 1 (data-model.md User invariants).
 	CreateUser(ctx context.Context, arg CreateUserParams) (CreateUserRow, error)
 	DeleteDepartment(ctx context.Context, id int64) error
 	DeleteRole(ctx context.Context, id int64) error
 	DeleteUser(ctx context.Context, id int64) error
 	DeleteUserRolesByUserID(ctx context.Context, userID int64) error
+	FinalizeCleanupAudit(ctx context.Context, arg FinalizeCleanupAuditParams) (pgtype.UUID, error)
+	// Platform-owned single-row bridge mode (migration 000008). The startup
+	// gate (cmd/server) reads it to verify legacy_delete_sync_enabled=false
+	// before accepting the delete consumer/dispatcher or the BFF /users/delete
+	// route (plan Phase 5.9 step 4). Writes never happen through this package:
+	// controlled transitions go through set_legacy_delete_sync_mode (T076).
+	GetCompatibilityBridgeMode(ctx context.Context) (CompatibilityBridgeMode, error)
 	GetDepartmentByID(ctx context.Context, id int64) (Department, error)
 	GetDepartmentByName(ctx context.Context, name string) (Department, error)
 	GetRoleByCode(ctx context.Context, code string) (Role, error)
@@ -37,6 +52,7 @@ type Querier interface {
 	GetUserByID(ctx context.Context, id int64) (GetUserByIDRow, error)
 	GetUserByUsername(ctx context.Context, username string) (GetUserByUsernameRow, error)
 	GetUserFullByID(ctx context.Context, id int64) (GetUserFullByIDRow, error)
+	HasPermissionByUserID(ctx context.Context, arg HasPermissionByUserIDParams) (bool, error)
 	// Health check query for sqlc.
 	// Used to verify database connectivity during readiness checks.
 	// Currently unused by scaffold (health check uses pgx Ping directly),
@@ -46,12 +62,29 @@ type Querier interface {
 	// departments.sql
 	// Queries for the departments table (self-referencing tree).
 	ListDepartments(ctx context.Context) ([]Department, error)
+	// permissions.sql
+	// Effective permissions are the distinct union of grants from all user roles.
+	ListEffectivePermissionsByUserID(ctx context.Context, userID int64) ([]string, error)
 	// roles.sql
 	// Queries for the roles table. `code` is reserved for phase-2 permission filtering.
 	ListRoles(ctx context.Context) ([]Role, error)
 	ListRolesByUserID(ctx context.Context, userID int64) ([]ListRolesByUserIDRow, error)
 	ListUsersByDepartment(ctx context.Context, arg ListUsersByDepartmentParams) ([]ListUsersByDepartmentRow, error)
+	// evidence_cleanup.sql
+	// Platform evidence-cleanup audit (T078): the immutable
+	// platform_evidence_cleanup_audit table (migration 000013) is written only
+	// through the two SECURITY DEFINER functions, so no runtime login can touch
+	// the audit directly. Caller identity fields come from the trusted Platform
+	// operations context, never from caller-supplied display text.
+	RecordCleanupAudit(ctx context.Context, arg RecordCleanupAuditParams) (pgtype.UUID, error)
+	RecordRolloutGateSample(ctx context.Context, arg RecordRolloutGateSampleParams) (int64, error)
 	RevokeSessionByTokenHash(ctx context.Context, tokenHash string) error
+	// Controlled bridge-mode transition (T076): runs the Platform-owned SECURITY
+	// DEFINER function which CAS-bumps the mode row, appends the immutable
+	// compatibility_bridge_mode_changes audit row and returns the resulting
+	// version. An idempotent replay whose target is already achieved returns the
+	// current version; a stale CAS with a different target raises.
+	SetLegacyDeleteSyncMode(ctx context.Context, arg SetLegacyDeleteSyncModeParams) (int64, error)
 	TouchSession(ctx context.Context, arg TouchSessionParams) error
 	UpdateDepartment(ctx context.Context, arg UpdateDepartmentParams) (Department, error)
 	UpdateRbacUser(ctx context.Context, arg UpdateRbacUserParams) (UpdateRbacUserRow, error)

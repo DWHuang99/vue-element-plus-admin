@@ -1,6 +1,7 @@
 package health
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -196,4 +197,112 @@ func TestHandler_NilDB(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "degraded", resp.Status)
 	assert.Equal(t, "unavailable", resp.Checks["database"])
+}
+
+// --- T071 per-module readiness probes --------------------------------------
+
+// mockProbe is a named Probe whose outcome can be flipped per test.
+type mockProbe struct {
+	err error
+}
+
+func (p *mockProbe) check(ctx context.Context) error { return p.err }
+
+// moduleProbes builds the four US5 module probes: three DB-backed modules
+// plus the outbox dispatcher (disabled → ok, enabled → loop-alive).
+func moduleProbes(t *testing.T, iam, org, workflow, dispatcher error) []Probe {
+	t.Helper()
+	return []Probe{
+		{Name: "iam_database", Check: (&mockProbe{err: iam}).check},
+		{Name: "organization_database", Check: (&mockProbe{err: org}).check},
+		{Name: "admin_workflow_store", Check: (&mockProbe{err: workflow}).check},
+		{Name: "outbox_dispatcher", Check: func(ctx context.Context) error { return dispatcher }},
+	}
+}
+
+func TestReady_ModuleProbesAllOk(t *testing.T) {
+	handler := NewHandlerWithProbes(&mockDB{}, newTestLogger(),
+		moduleProbes(t, nil, nil, nil, nil))
+	router := setupRouter(handler)
+
+	req := httptest.NewRequest(http.MethodGet, "/health/ready", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp HealthResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "ok", resp.Status)
+	// Base database plus every module is distinguished in the aggregate.
+	for _, name := range []string{"database", "iam_database", "organization_database", "admin_workflow_store", "outbox_dispatcher"} {
+		assert.Equal(t, "ok", resp.Checks[name], "check %s", name)
+	}
+}
+
+func TestReady_ModuleProbeDownNamesTheModule(t *testing.T) {
+	handler := NewHandlerWithProbes(&mockDB{}, newTestLogger(),
+		moduleProbes(t, nil, errors.New("org db unreachable"), nil, nil))
+	router := setupRouter(handler)
+
+	req := httptest.NewRequest(http.MethodGet, "/health/ready", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+
+	var resp HealthResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "degraded", resp.Status)
+	assert.Equal(t, "ok", resp.Checks["iam_database"])
+	assert.Equal(t, "unavailable", resp.Checks["organization_database"])
+	assert.Equal(t, "ok", resp.Checks["admin_workflow_store"])
+	assert.Equal(t, "ok", resp.Checks["outbox_dispatcher"])
+}
+
+func TestReady_DispatcherDownDegradesAggregate(t *testing.T) {
+	handler := NewHandlerWithProbes(&mockDB{}, newTestLogger(),
+		moduleProbes(t, nil, nil, nil, errors.New("outbox dispatcher not running")))
+	router := setupRouter(handler)
+
+	req := httptest.NewRequest(http.MethodGet, "/health/ready", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+
+	var resp HealthResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "unavailable", resp.Checks["outbox_dispatcher"])
+	assert.Equal(t, "degraded", resp.Status)
+}
+
+func TestReady_ModuleTransitionLoggingOnce(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	orgProbe := &mockProbe{}
+	handler := NewHandlerWithProbes(&mockDB{}, logger, []Probe{
+		{Name: "organization_database", Check: orgProbe.check},
+	})
+	router := setupRouter(handler)
+
+	// Baseline observation: no transition logged.
+	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/health/ready", nil))
+	assert.NotContains(t, buf.String(), "organization_database")
+
+	// Down: one transition line naming the module.
+	orgProbe.err = errors.New("down")
+	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/health/ready", nil))
+	assert.Contains(t, buf.String(), "organization_database")
+	assert.Contains(t, buf.String(), "degraded")
+
+	// Steady state stays quiet.
+	before := buf.Len()
+	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/health/ready", nil))
+	assert.Equal(t, before, buf.Len(), "no repeated transition logging while state is steady")
+
+	// Restored: one more transition line.
+	orgProbe.err = nil
+	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/health/ready", nil))
+	assert.Contains(t, buf.String(), "restored")
 }

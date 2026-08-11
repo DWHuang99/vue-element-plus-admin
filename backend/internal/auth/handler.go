@@ -1,3 +1,5 @@
+//go:build rollback
+
 package auth
 
 import (
@@ -135,6 +137,9 @@ func (h *Handler) Me(c *gin.Context) {
 		h.logger.Error("get profile failed", "request_id", c.GetString("X-Request-Id"), "error", err.Error())
 		c.JSON(http.StatusInternalServerError, newErrorEnvelope("INTERNAL_ERROR", "内部错误", nil))
 		return
+	}
+	if profile.EffectivePermissions == nil {
+		profile.EffectivePermissions = []string{}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{"user": profile}})

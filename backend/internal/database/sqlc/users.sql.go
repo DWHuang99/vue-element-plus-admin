@@ -12,8 +12,8 @@ import (
 )
 
 const createUser = `-- name: CreateUser :one
-INSERT INTO users (username, password_hash)
-VALUES ($1, $2)
+INSERT INTO users (username, password_hash, lifecycle_state, version)
+VALUES ($1, $2, 'active', 1)
 RETURNING id, username, password_hash, created_at, updated_at
 `
 
@@ -30,6 +30,8 @@ type CreateUserRow struct {
 	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 }
 
+// 000006 dropped the temporary lifecycle defaults; registration states active
+// explicitly and creates version 1 (data-model.md User invariants).
 func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (CreateUserRow, error) {
 	row := q.db.QueryRow(ctx, createUser, arg.Username, arg.PasswordHash)
 	var i CreateUserRow

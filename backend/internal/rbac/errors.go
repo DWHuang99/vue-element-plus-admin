@@ -1,3 +1,5 @@
+//go:build rollback
+
 package rbac
 
 import "errors"
@@ -15,6 +17,10 @@ var (
 	ErrNameTaken = errors.New("name already taken")
 	// ErrDeleteProtected is returned when a delete is blocked by live references.
 	ErrDeleteProtected = errors.New("delete blocked by references")
+	// ErrBuiltinRoleCodeImmutable protects the stable codes used by authorization.
+	ErrBuiltinRoleCodeImmutable = errors.New("built-in role code is immutable")
+	// ErrBuiltinRoleDeleteProtected prevents removal of required built-in roles.
+	ErrBuiltinRoleDeleteProtected = errors.New("built-in role cannot be deleted")
 	// ErrInvalidInput is returned for inputs the handler cannot validate alone.
 	ErrInvalidInput = errors.New("invalid input")
 )

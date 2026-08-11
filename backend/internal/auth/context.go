@@ -1,3 +1,5 @@
+//go:build rollback
+
 package auth
 
 // Gin context keys for authenticated request state.

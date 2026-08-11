@@ -34,8 +34,8 @@ func (q *Queries) CountUsersByDepartment(ctx context.Context, arg CountUsersByDe
 
 const createRbacUser = `-- name: CreateRbacUser :one
 
-INSERT INTO users (username, password_hash, account, email, department_id)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO users (username, password_hash, account, email, department_id, lifecycle_state, version)
+VALUES ($1, $2, $3, $4, $5, 'active', 1)
 RETURNING id, username, password_hash, account, email, department_id, created_at, updated_at
 `
 
@@ -62,6 +62,8 @@ type CreateRbacUserRow struct {
 // User-management queries: create/update/delete users, paginated listing,
 // and the user<->role join. Query names avoid colliding with the existing
 // auth-focused CreateUser / GetUserByUsername / GetUserByID.
+// 000006 dropped the temporary lifecycle defaults; admin-created users state
+// active explicitly and create version 1 (data-model.md User invariants).
 func (q *Queries) CreateRbacUser(ctx context.Context, arg CreateRbacUserParams) (CreateRbacUserRow, error) {
 	row := q.db.QueryRow(ctx, createRbacUser,
 		arg.Username,

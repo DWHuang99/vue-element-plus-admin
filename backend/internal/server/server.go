@@ -10,6 +10,19 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// LegacyRateLimitConfig mirrors config.RateLimitConfig for router construction.
+// It is shared (not gated behind the rollback build tag) because the
+// composition root's NewWire signature carries it for both wirings: the Admin
+// BFF router maps its fields into adminbfhttp.RateLimitConfig, and the legacy
+// monolith router (rollback build only) consumes it directly. The name keeps
+// the pre-split contract so callers and tests read identically in every build.
+type LegacyRateLimitConfig struct {
+	Enabled        bool
+	RegisterIPHour int
+	LoginIP15Min   int
+	LoginUser15Min int
+}
+
 // Config holds HTTP server configuration.
 type Config struct {
 	Host         string
@@ -28,9 +41,23 @@ type Server struct {
 
 // New creates a new Server with the given configuration and dependencies.
 func New(cfg Config, logger *slog.Logger) *Server {
+	return newWithRouter(cfg, logger, nil)
+}
+
+// NewWithRouter creates a Server serving the given router (e.g. the legacy
+// monolith router from NewLegacyRouter, or the Admin BFF router after cutover).
+// The server layer still owns Recovery, NoRoute and NoMethod wiring so the
+// external router keeps identical error-handler behavior.
+func NewWithRouter(cfg Config, logger *slog.Logger, router *gin.Engine) *Server {
+	return newWithRouter(cfg, logger, router)
+}
+
+func newWithRouter(cfg Config, logger *slog.Logger, router *gin.Engine) *Server {
 	gin.SetMode(gin.ReleaseMode)
 
-	router := gin.New()
+	if router == nil {
+		router = gin.New()
+	}
 
 	// Recovery middleware logs panics but doesn't expose stack traces to clients
 	router.Use(gin.Recovery())
@@ -48,8 +75,8 @@ func New(cfg Config, logger *slog.Logger) *Server {
 	}
 
 	// Register error handlers
-	router.NoRoute(srv.notFoundHandler)
-	router.NoMethod(srv.methodNotAllowedHandler)
+	router.NoRoute(notFoundHandler)
+	router.NoMethod(methodNotAllowedHandler)
 
 	return srv
 }
@@ -78,7 +105,7 @@ func (s *Server) Addr() string {
 }
 
 // notFoundHandler returns a consistent JSON 404 response.
-func (s *Server) notFoundHandler(c *gin.Context) {
+func notFoundHandler(c *gin.Context) {
 	c.JSON(http.StatusNotFound, gin.H{
 		"error": gin.H{
 			"code":    "NOT_FOUND",
@@ -88,7 +115,7 @@ func (s *Server) notFoundHandler(c *gin.Context) {
 }
 
 // methodNotAllowedHandler returns a consistent JSON 405 response.
-func (s *Server) methodNotAllowedHandler(c *gin.Context) {
+func methodNotAllowedHandler(c *gin.Context) {
 	c.JSON(http.StatusMethodNotAllowed, gin.H{
 		"error": gin.H{
 			"code":    "METHOD_NOT_ALLOWED",

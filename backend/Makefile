@@ -36,6 +36,9 @@ vet:
 clean:
 	rm -f $(BINARY_NAME)
 	rm -f internal/database/sqlc/*.go
+	rm -f internal/iam/postgres/sqlc/*.go
+	rm -f internal/organization/postgres/sqlc/*.go
+	rm -f internal/adminbff/postgres/sqlc/*.go
 
 # Create a new migration file
 # Usage: make migrate-create NAME=add_users_table
@@ -50,9 +53,13 @@ migrate-up:
 migrate-down:
 	migrate -path $(MIGRATIONS_DIR) -database "$(DATABASE_URL)" down 1
 
-# Generate sqlc code from queries
+# Generate sqlc code: transitional global package (removed in the final phase,
+# until then legacy auth/rbac still consume it) + the three owner packages.
 sqlc-generate:
 	sqlc generate
+	sqlc generate -f db/iam/sqlc.yaml
+	sqlc generate -f db/organization/sqlc.yaml
+	sqlc generate -f db/adminbff/sqlc.yaml
 
 # Download dependencies
 deps:

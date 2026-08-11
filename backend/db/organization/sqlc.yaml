@@ -1,0 +1,17 @@
+# Organization-owned queries (data-model.md Ownership matrix).
+# Paths are relative to this file. Schema is the full shared migration set;
+# only Organization-owned tables are referenced by these queries.
+version: "2"
+
+sql:
+  - engine: "postgresql"
+    queries: "queries"
+    schema: "../migrations"
+    gen:
+      go:
+        package: "sqlc"
+        out: "../../internal/organization/postgres/sqlc"
+        sql_package: "pgx/v5"
+        emit_json_tags: true
+        emit_interface: true
+        emit_empty_slices: true

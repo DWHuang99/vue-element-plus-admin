@@ -42,3 +42,12 @@ func New(cfg Config) *slog.Logger {
 
 	return slog.New(handler)
 }
+
+// WithModule scopes a logger to one module and service (T072, plan Phase
+// 7.5): every log line a service emits carries its ownership context, so a
+// BFF aggregate request can be traced across iam/organization/integration
+// log streams. The base logger is never mutated — the scoped child shares
+// the same handler.
+func WithModule(logger *slog.Logger, module, service string) *slog.Logger {
+	return logger.With("module", module, "service", service)
+}

@@ -1,3 +1,5 @@
+//go:build rollback
+
 // Package rbac provides department/role/user management for the admin console.
 // Layered like internal/auth: business rules live in the service (testable),
 // the handler only adapts HTTP to the service (see constitution principle IV).
@@ -24,6 +26,7 @@ type RoleView struct {
 	ID        int64     `json:"id"`
 	Name      string    `json:"name"`
 	Code      string    `json:"code"`
+	IsBuiltin bool      `json:"is_builtin"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -94,6 +97,17 @@ type SaveUserParams struct {
 	Roles        []int64
 }
 
+// UsersDeleteDelegate (T076) is the US5 delegation target for the legacy
+// POST /users/delete route: when installed, the handler calls the IAM
+// DeleteUsers port (outbox event + receipt) instead of the legacy direct
+// delete. The extra actor/correlation arguments come from the legacy auth
+// middleware context so the IAM operation audit keeps the acting principal.
+// Declared as a duck interface so the legacy module stays IAM-free — the
+// composition root supplies an iam.Service-backed adapter.
+type UsersDeleteDelegate interface {
+	DeleteUsers(ctx context.Context, actorID int64, correlationID string, ids []int64) error
+}
+
 // Service is the rbac business logic boundary (independent, testable).
 type Service interface {
 	ListRoles(ctx context.Context) ([]RoleView, error)
@@ -130,7 +144,13 @@ func (s *RBACService) ListRoles(ctx context.Context) ([]RoleView, error) {
 	}
 	views := make([]RoleView, 0, len(rows))
 	for _, r := range rows {
-		views = append(views, RoleView{ID: r.ID, Name: r.Name, Code: r.Code, CreatedAt: r.CreatedAt.Time})
+		views = append(views, RoleView{
+			ID:        r.ID,
+			Name:      r.Name,
+			Code:      r.Code,
+			IsBuiltin: isBuiltinRoleCode(r.Code),
+			CreatedAt: r.CreatedAt.Time,
+		})
 	}
 	return views, nil
 }
@@ -138,11 +158,15 @@ func (s *RBACService) ListRoles(ctx context.Context) ([]RoleView, error) {
 // SaveRole creates (no id) or updates (with id) a role.
 func (s *RBACService) SaveRole(ctx context.Context, p SaveRoleParams) error {
 	if p.ID != nil {
-		if _, err := s.q.GetRoleByID(ctx, *p.ID); err != nil {
+		existing, err := s.q.GetRoleByID(ctx, *p.ID)
+		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrRoleNotFound
 			}
 			return fmt.Errorf("check role: %w", err)
+		}
+		if isBuiltinRoleCode(existing.Code) && p.Code != existing.Code {
+			return ErrBuiltinRoleCodeImmutable
 		}
 		if _, err := s.q.UpdateRole(ctx, sqlc.UpdateRoleParams{ID: *p.ID, Name: p.Name, Code: p.Code}); err != nil {
 			return mapUniqueViolation(err)
@@ -155,25 +179,43 @@ func (s *RBACService) SaveRole(ctx context.Context, p SaveRoleParams) error {
 	return nil
 }
 
-// DeleteRoles removes roles, refusing ones still referenced by users.
+// DeleteRoles removes roles atomically, refusing built-ins and roles still
+// referenced by users. The full batch is validated before any row is deleted.
 func (s *RBACService) DeleteRoles(ctx context.Context, ids []int64) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin delete roles transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	qtx := sqlc.New(tx)
 	for _, id := range ids {
-		if _, err := s.q.GetRoleByID(ctx, id); err != nil {
+		role, err := qtx.GetRoleByID(ctx, id)
+		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrRoleNotFound
 			}
 			return fmt.Errorf("check role: %w", err)
 		}
-		n, err := s.q.CountUserRolesByRoleID(ctx, id)
+		if isBuiltinRoleCode(role.Code) {
+			return ErrBuiltinRoleDeleteProtected
+		}
+		n, err := qtx.CountUserRolesByRoleID(ctx, id)
 		if err != nil {
 			return fmt.Errorf("count role users: %w", err)
 		}
 		if n > 0 {
 			return fmt.Errorf("%w: role %d still has users", ErrDeleteProtected, id)
 		}
-		if err := s.q.DeleteRole(ctx, id); err != nil {
+	}
+
+	for _, id := range ids {
+		if err := qtx.DeleteRole(ctx, id); err != nil {
 			return fmt.Errorf("delete role: %w", err)
 		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit delete roles transaction: %w", err)
 	}
 	return nil
 }
@@ -241,32 +283,46 @@ func (s *RBACService) SaveDepartment(ctx context.Context, p SaveDepartmentParams
 	return nil
 }
 
-// DeleteDepartments removes departments, refusing ones with children or users.
+// DeleteDepartments removes departments atomically, refusing ones with
+// children or users. The full batch is validated before any row is deleted.
 func (s *RBACService) DeleteDepartments(ctx context.Context, ids []int64) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin delete departments transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	qtx := sqlc.New(tx)
 	for _, id := range ids {
-		if _, err := s.q.GetDepartmentByID(ctx, id); err != nil {
+		if _, err := qtx.GetDepartmentByID(ctx, id); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrDepartmentNotFound
 			}
 			return fmt.Errorf("check department: %w", err)
 		}
-		children, err := s.q.CountDepartmentsByParentID(ctx, pgtype.Int8{Int64: id, Valid: true})
+		children, err := qtx.CountDepartmentsByParentID(ctx, pgtype.Int8{Int64: id, Valid: true})
 		if err != nil {
 			return fmt.Errorf("count children: %w", err)
 		}
 		if children > 0 {
 			return fmt.Errorf("%w: department %d has children", ErrDeleteProtected, id)
 		}
-		users, err := s.q.CountUsersByDepartmentID(ctx, pgtype.Int8{Int64: id, Valid: true})
+		users, err := qtx.CountUsersByDepartmentID(ctx, pgtype.Int8{Int64: id, Valid: true})
 		if err != nil {
 			return fmt.Errorf("count department users: %w", err)
 		}
 		if users > 0 {
 			return fmt.Errorf("%w: department %d has users", ErrDeleteProtected, id)
 		}
-		if err := s.q.DeleteDepartment(ctx, id); err != nil {
+	}
+
+	for _, id := range ids {
+		if err := qtx.DeleteDepartment(ctx, id); err != nil {
 			return fmt.Errorf("delete department: %w", err)
 		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit delete departments transaction: %w", err)
 	}
 	return nil
 }
@@ -416,23 +472,46 @@ func (s *RBACService) SaveUser(ctx context.Context, p SaveUserParams) error {
 	return nil
 }
 
-// DeleteUsers physically deletes users; user_roles cascade away.
+// DeleteUsers physically deletes users atomically; user_roles cascade away.
+// The full batch is validated before any row is deleted.
 func (s *RBACService) DeleteUsers(ctx context.Context, ids []int64) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin delete users transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	qtx := sqlc.New(tx)
 	for _, id := range ids {
-		if _, err := s.q.GetUserByID(ctx, id); err != nil {
+		if _, err := qtx.GetUserByID(ctx, id); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrUserNotFound
 			}
 			return fmt.Errorf("check user: %w", err)
 		}
-		if err := s.q.DeleteUser(ctx, id); err != nil {
+	}
+
+	for _, id := range ids {
+		if err := qtx.DeleteUser(ctx, id); err != nil {
 			return fmt.Errorf("delete user: %w", err)
 		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit delete users transaction: %w", err)
 	}
 	return nil
 }
 
 // --- helpers ---
+
+func isBuiltinRoleCode(code string) bool {
+	switch code {
+	case "super_admin", "admin", "user":
+		return true
+	default:
+		return false
+	}
+}
 
 // pgint8p maps a *int64 to pgtype.Int8 (nil -> NULL).
 func pgint8p(v *int64) pgtype.Int8 {

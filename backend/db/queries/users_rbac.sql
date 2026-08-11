@@ -4,8 +4,10 @@
 -- auth-focused CreateUser / GetUserByUsername / GetUserByID.
 
 -- name: CreateRbacUser :one
-INSERT INTO users (username, password_hash, account, email, department_id)
-VALUES ($1, $2, $3, $4, $5)
+-- 000006 dropped the temporary lifecycle defaults; admin-created users state
+-- active explicitly and create version 1 (data-model.md User invariants).
+INSERT INTO users (username, password_hash, account, email, department_id, lifecycle_state, version)
+VALUES ($1, $2, $3, $4, $5, 'active', 1)
 RETURNING id, username, password_hash, account, email, department_id, created_at, updated_at;
 
 -- name: UpdateRbacUser :one

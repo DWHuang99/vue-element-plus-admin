@@ -1,3 +1,5 @@
+//go:build rollback
+
 // Handler adapts the rbac Service to HTTP (protocol layer only).
 package rbac
 
@@ -10,6 +12,9 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/hdw/vue-element-plus-admin/backend/internal/auth"
+	"github.com/hdw/vue-element-plus-admin/backend/internal/middleware"
 )
 
 // Validation rules (shared with the handler layer; service holds business rules).
@@ -23,11 +28,23 @@ var (
 type Handler struct {
 	svc    Service
 	logger *slog.Logger
+	// deleteDelegate (T076) is the US5 delegation target for POST
+	// /users/delete: when set, the route calls the IAM DeleteUsers port (with
+	// its outbox event + receipt) instead of the legacy direct delete. nil
+	// keeps the pre-split behavior. The composition root installs it behind
+	// LEGACY_DELETE_IAM_DELEGATION_ENABLED.
+	deleteDelegate UsersDeleteDelegate
 }
 
 // NewHandler creates an rbac HTTP handler.
 func NewHandler(svc Service, logger *slog.Logger) *Handler {
 	return &Handler{svc: svc, logger: logger}
+}
+
+// SetUsersDeleteDelegate installs the US5 delete delegation target (T076).
+// Nil reverts the route to the legacy direct delete.
+func (h *Handler) SetUsersDeleteDelegate(d UsersDeleteDelegate) {
+	h.deleteDelegate = d
 }
 
 // --- request/response types ---
@@ -90,6 +107,10 @@ func errorMapping(err error) (code string, status int, message string, fieldErrs
 		return "USER_NOT_FOUND", http.StatusNotFound, "用户不存在", nil
 	case errors.Is(err, ErrNameTaken):
 		return "NAME_TAKEN", http.StatusConflict, "名称已存在", nil
+	case errors.Is(err, ErrBuiltinRoleCodeImmutable):
+		return "BUILTIN_ROLE_CODE_IMMUTABLE", http.StatusConflict, "内置角色代码不可修改", nil
+	case errors.Is(err, ErrBuiltinRoleDeleteProtected):
+		return "BUILTIN_ROLE_DELETE_PROTECTED", http.StatusConflict, "内置角色不可删除", nil
 	case errors.Is(err, ErrDeleteProtected):
 		return "DELETE_PROTECTED", http.StatusBadRequest,
 			"存在关联数据（下级部门/用户/角色引用），无法删除", []fieldError{{Field: "ids", Code: "REFERENCES", Message: "请先处理关联数据"}}
@@ -260,7 +281,11 @@ func (h *Handler) SaveUser(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{}})
 }
 
-// DeleteUsers handles POST /api/v1/users/delete.
+// DeleteUsers handles POST /api/v1/users/delete. With the US5 delete
+// delegation installed (T076) the route runs through the IAM DeleteUsers
+// port — the acting principal and correlation ID from the legacy auth
+// middleware context become the operation's audit fields. Without it the
+// route keeps the legacy direct delete.
 func (h *Handler) DeleteUsers(c *gin.Context) {
 	var req deleteRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -269,6 +294,21 @@ func (h *Handler) DeleteUsers(c *gin.Context) {
 	}
 	if fieldErrs := validateIDs(req.IDs); len(fieldErrs) > 0 {
 		c.JSON(http.StatusBadRequest, newErrorEnvelope("AUTH_INVALID_INPUT", "请求参数校验失败", fieldErrs))
+		return
+	}
+	if h.deleteDelegate != nil {
+		actorID := int64(0)
+		if principal, ok := c.Get(auth.ContextAuthUser); ok {
+			if u, ok := principal.(*auth.AuthUser); ok {
+				actorID = u.ID
+			}
+		}
+		if err := h.deleteDelegate.DeleteUsers(
+			c.Request.Context(), actorID, c.GetString(middleware.RequestIDHeader), req.IDs); err != nil {
+			h.fail(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"data": gin.H{}})
 		return
 	}
 	if err := h.svc.DeleteUsers(c.Request.Context(), req.IDs); err != nil {

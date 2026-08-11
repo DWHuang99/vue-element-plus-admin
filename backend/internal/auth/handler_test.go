@@ -1,3 +1,5 @@
+//go:build rollback
+
 package auth
 
 import (
@@ -345,13 +347,16 @@ func TestHandler_Me(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
 	var data struct {
 		User struct {
-			ID       int64  `json:"id"`
-			Username string `json:"username"`
+			ID                   int64    `json:"id"`
+			Username             string   `json:"username"`
+			EffectivePermissions []string `json:"effective_permissions"`
 		} `json:"user"`
 	}
 	require.NoError(t, json.Unmarshal(body["data"], &data))
 	assert.Equal(t, int64(7), data.User.ID)
 	assert.Equal(t, "alice", data.User.Username)
+	require.NotNil(t, data.User.EffectivePermissions)
+	assert.Empty(t, data.User.EffectivePermissions)
 }
 
 // TestHandler_MeReturnsRolesAndDepartment: the US3 /auth/me extension must
@@ -370,6 +375,7 @@ func TestHandler_MeReturnsRolesAndDepartment(t *testing.T) {
 					{ID: 3, Name: "普通用户", Code: "user"},
 					{ID: 2, Name: "管理员", Code: "admin"},
 				},
+				EffectivePermissions: []string{"departments.read", "roles.read", "users.read"},
 			}, nil
 		},
 	})
@@ -400,6 +406,7 @@ func TestHandler_MeReturnsRolesAndDepartment(t *testing.T) {
 				Name string `json:"name"`
 				Code string `json:"code"`
 			} `json:"roles"`
+			EffectivePermissions []string `json:"effective_permissions"`
 		} `json:"user"`
 	}
 	require.NoError(t, json.Unmarshal(body["data"], &data))
@@ -410,6 +417,7 @@ func TestHandler_MeReturnsRolesAndDepartment(t *testing.T) {
 	require.Len(t, data.User.Roles, 2)
 	assert.Equal(t, "user", data.User.Roles[0].Code)
 	assert.Equal(t, "admin", data.User.Roles[1].Code)
+	assert.Equal(t, []string{"departments.read", "roles.read", "users.read"}, data.User.EffectivePermissions)
 }
 
 func TestHandler_MeMissingPrincipalReturns401(t *testing.T) {

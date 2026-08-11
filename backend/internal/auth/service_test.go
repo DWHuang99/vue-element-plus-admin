@@ -1,3 +1,5 @@
+//go:build rollback
+
 package auth
 
 import (
@@ -15,6 +17,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 
+	"github.com/hdw/vue-element-plus-admin/backend/internal/authorization"
 	"github.com/hdw/vue-element-plus-admin/backend/internal/database"
 	"github.com/hdw/vue-element-plus-admin/backend/internal/database/sqlc"
 )
@@ -164,6 +167,8 @@ func TestService_GetUserProfile(t *testing.T) {
 	assert.Nil(t, profile.Department, "freshly registered user has no department")
 	require.Len(t, profile.Roles, 1)
 	assert.Equal(t, "user", profile.Roles[0].Code)
+	require.NotNil(t, profile.EffectivePermissions)
+	assert.Empty(t, profile.EffectivePermissions, "the default user role has no permissions")
 
 	// Assign a department and verify it is surfaced. Resolve the seeded 研发部
 	// id dynamically via SQL to avoid coupling to seed row ids.
@@ -179,6 +184,30 @@ func TestService_GetUserProfile(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, profile.Department)
 	assert.Equal(t, "研发部", profile.Department.Name)
+}
+
+func TestService_GetUserProfileIncludesEffectivePermissions(t *testing.T) {
+	username := uniqueUsername()
+	res, _ := mustRegister(t, username, "supersecret123")
+
+	q := sqlc.New(testSvc.pool)
+	adminRole, err := q.GetRoleByCode(testCtx, "admin")
+	require.NoError(t, err)
+	require.NoError(t, q.InsertUserRole(testCtx, sqlc.InsertUserRoleParams{
+		UserID: res.User.ID,
+		RoleID: adminRole.ID,
+	}))
+
+	profile, err := testSvc.GetUserProfile(testCtx, res.User.ID)
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		authorization.DepartmentsRead,
+		authorization.DepartmentsWrite,
+		authorization.RolesRead,
+		authorization.RolesWrite,
+		authorization.UsersRead,
+		authorization.UsersWrite,
+	}, profile.EffectivePermissions)
 }
 
 // T025: Login issues a session and fails uniformly for wrong password vs missing user.

@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -100,4 +101,82 @@ func TestRequestID_PresentInContext(t *testing.T) {
 func TestRequestID_HeaderConstants(t *testing.T) {
 	assert.Equal(t, "X-Request-Id", RequestIDHeader)
 	assert.Equal(t, "X-Response-Time", ResponseTimeHeader)
+}
+
+// T073: the request ID is bounded correlation context — client-supplied
+// values outside the restricted charset are discarded, never echoed.
+func TestRequestID_RejectsInvalidCharset(t *testing.T) {
+	router := gin.New()
+	router.Use(RequestID())
+	router.GET("/test", func(c *gin.Context) {
+		c.String(http.StatusOK, "ok")
+	})
+
+	invalid := []string{
+		"has space",
+		"tab\tid",
+		"unicode-汉字",
+		"quote\"inject",
+		"newline\ninject",
+		".leading-dot",           // first char must be alphanumeric
+		"$dollar",                // $ outside charset
+		strings.Repeat("a", 129), // overlong
+	}
+	for _, in := range invalid {
+		req := httptest.NewRequest(http.MethodGet, "/test", nil)
+		req.Header.Set(RequestIDHeader, in)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		got := w.Header().Get(RequestIDHeader)
+		assert.NotEqual(t, in, got, "invalid id %q must not be echoed", in)
+		assert.True(t, ValidRequestID(got), "regenerated id must fit the charset: %q", got)
+		assert.Len(t, got, 36, "regenerated id should be a UUID: %q", got)
+	}
+}
+
+// T073: values inside the restricted charset pass through verbatim.
+func TestRequestID_PreservesValidCharsetVariants(t *testing.T) {
+	router := gin.New()
+	router.Use(RequestID())
+	router.GET("/test", func(c *gin.Context) {
+		c.String(http.StatusOK, "ok")
+	})
+
+	valid := []string{
+		"my-custom-id-123",
+		"a.b:c_d-e",              // every extra charset member
+		"12345",                  // digits only
+		"Z",                      // single char
+		strings.Repeat("a", 128), // exact max length
+	}
+	for _, in := range valid {
+		req := httptest.NewRequest(http.MethodGet, "/test", nil)
+		req.Header.Set(RequestIDHeader, in)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, in, w.Header().Get(RequestIDHeader), "valid id %q must be preserved", in)
+	}
+}
+
+// T073: the request ID is never derived from the token — a request carrying
+// credentials but no request ID gets a fresh opaque UUID, and a client
+// request ID is never rewritten from credential material.
+func TestRequestID_NeverDerivedFromToken(t *testing.T) {
+	router := gin.New()
+	router.Use(RequestID())
+	router.GET("/test", func(c *gin.Context) {
+		c.String(http.StatusOK, "ok")
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req.Header.Set("Authorization", "Bearer tok-abc123")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	got := w.Header().Get(RequestIDHeader)
+	assert.NotEqual(t, "tok-abc123", got)
+	assert.NotContains(t, got, "tok-abc123", "request ID must not be derived from the token")
+	assert.Len(t, got, 36)
 }

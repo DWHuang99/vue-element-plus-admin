@@ -1,3 +1,5 @@
+//go:build rollback
+
 package rbac
 
 import (
@@ -11,6 +13,9 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/hdw/vue-element-plus-admin/backend/internal/auth"
+	"github.com/hdw/vue-element-plus-admin/backend/internal/middleware"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -143,7 +148,7 @@ func decodeErr(t *testing.T, w *httptest.ResponseRecorder) (string, []struct {
 
 func TestListRoles_Handler(t *testing.T) {
 	m := &mockService{listRolesFn: func(ctx context.Context) ([]RoleView, error) {
-		return []RoleView{{ID: 1, Name: "超级管理员", Code: "super_admin"}}, nil
+		return []RoleView{{ID: 1, Name: "超级管理员", Code: "super_admin", IsBuiltin: true}}, nil
 	}}
 	r := setupRouter(newTestHandler(m))
 	w := doReq(t, r, http.MethodGet, "/roles", nil)
@@ -157,6 +162,7 @@ func TestListRoles_Handler(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &res))
 	assert.Len(t, res.Data.List, 1)
 	assert.Equal(t, 1, res.Data.Total)
+	assert.True(t, res.Data.List[0].IsBuiltin)
 }
 
 func TestSaveRole_Handler_Valid(t *testing.T) {
@@ -187,6 +193,17 @@ func TestSaveRole_Handler_NameTaken(t *testing.T) {
 	assert.Equal(t, "NAME_TAKEN", code)
 }
 
+func TestSaveRole_Handler_BuiltinCodeImmutable(t *testing.T) {
+	m := &mockService{saveRoleFn: func(ctx context.Context, p SaveRoleParams) error {
+		return ErrBuiltinRoleCodeImmutable
+	}}
+	r := setupRouter(newTestHandler(m))
+	w := doReq(t, r, http.MethodPost, "/roles", map[string]any{"id": 1, "name": "管理员", "code": "renamed_admin"})
+	require.Equal(t, http.StatusConflict, w.Code)
+	code, _ := decodeErr(t, w)
+	assert.Equal(t, "BUILTIN_ROLE_CODE_IMMUTABLE", code)
+}
+
 func TestDeleteRoles_Handler_EmptyIDs(t *testing.T) {
 	m := &mockService{}
 	r := setupRouter(newTestHandler(m))
@@ -207,6 +224,17 @@ func TestDeleteRoles_Handler_Protected(t *testing.T) {
 	assert.Equal(t, "DELETE_PROTECTED", code)
 	require.NotEmpty(t, fieldErrs)
 	assert.Equal(t, "ids", fieldErrs[0].Field)
+}
+
+func TestDeleteRoles_Handler_BuiltinProtected(t *testing.T) {
+	m := &mockService{deleteRolesFn: func(ctx context.Context, ids []int64) error {
+		return ErrBuiltinRoleDeleteProtected
+	}}
+	r := setupRouter(newTestHandler(m))
+	w := doReq(t, r, http.MethodPost, "/roles/delete", map[string]any{"ids": []int64{1}})
+	require.Equal(t, http.StatusConflict, w.Code)
+	code, _ := decodeErr(t, w)
+	assert.Equal(t, "BUILTIN_ROLE_DELETE_PROTECTED", code)
 }
 
 func TestDeleteRoles_Handler_NotFound(t *testing.T) {
@@ -339,4 +367,73 @@ func TestDeleteUsers_Handler_NotFound(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, w.Code)
 	code, _ := decodeErr(t, w)
 	assert.Equal(t, "USER_NOT_FOUND", code)
+}
+
+// --- T076 legacy delete delegation ---
+
+// mockDeleteDelegate records the delegation call for handler tests.
+type mockDeleteDelegate struct {
+	ids         []int64
+	actorID     int64
+	correlation string
+	err         error
+}
+
+func (m *mockDeleteDelegate) DeleteUsers(ctx context.Context, actorID int64, correlationID string, ids []int64) error {
+	m.actorID = actorID
+	m.correlation = correlationID
+	m.ids = ids
+	return m.err
+}
+
+func TestDeleteUsers_Handler_DelegatesToIAM(t *testing.T) {
+	// With the US5 delegation installed the route must call the delegate (not
+	// the legacy service), passing the acting principal and correlation ID
+	// from the auth middleware context.
+	m := &mockService{deleteUsersFn: func(ctx context.Context, ids []int64) error {
+		t.Error("legacy service must not be called when the delegate is installed")
+		return nil
+	}}
+	del := &mockDeleteDelegate{}
+	h := newTestHandler(m)
+	h.SetUsersDeleteDelegate(del)
+
+	req := httptest.NewRequest(http.MethodPost, "/users/delete", bytes.NewBufferString(`{"ids":[7,9]}`))
+	req.Header.Set("Content-Type", "application/json")
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = req
+	c.Set(auth.ContextAuthUser, &auth.AuthUser{ID: 42, Username: "operator"})
+	// The request-ID middleware stores the validated correlation ID in the
+	// gin context (never re-read from the raw header).
+	c.Set(middleware.RequestIDHeader, "corr-abc")
+	h.DeleteUsers(c)
+
+	require.Equal(t, http.StatusOK, c.Writer.Status())
+	require.Equal(t, []int64{7, 9}, del.ids)
+	require.Equal(t, int64(42), del.actorID, "acting principal flows into the IAM operation audit")
+	require.Equal(t, "corr-abc", del.correlation, "correlation ID flows into the IAM operation audit")
+}
+
+func TestDeleteUsers_Handler_DelegateError(t *testing.T) {
+	del := &mockDeleteDelegate{err: ErrUserNotFound}
+	h := newTestHandler(&mockService{})
+	h.SetUsersDeleteDelegate(del)
+	r := setupRouter(h)
+
+	w := doReq(t, r, http.MethodPost, "/users/delete", map[string]any{"ids": []int64{99}})
+	require.Equal(t, http.StatusNotFound, w.Code)
+	code, _ := decodeErr(t, w)
+	assert.Equal(t, "USER_NOT_FOUND", code, "delegated errors map through the same contract envelope")
+}
+
+func TestDeleteUsers_Handler_NoDelegateKeepsLegacyPath(t *testing.T) {
+	var called bool
+	m := &mockService{deleteUsersFn: func(ctx context.Context, ids []int64) error {
+		called = true
+		return nil
+	}}
+	r := setupRouter(newTestHandler(m))
+	w := doReq(t, r, http.MethodPost, "/users/delete", map[string]any{"ids": []int64{7}})
+	require.Equal(t, http.StatusOK, w.Code)
+	require.True(t, called, "without a delegate the legacy direct delete runs")
 }

@@ -1,3 +1,5 @@
+//go:build rollback
+
 package rbac
 
 import (
@@ -85,6 +87,7 @@ func TestListRoles_Seeded(t *testing.T) {
 	codes := map[string]bool{}
 	for _, r := range list {
 		codes[r.Code] = true
+		assert.True(t, r.IsBuiltin, "seeded role %q must be marked built-in", r.Code)
 	}
 	assert.True(t, codes["super_admin"] && codes["admin"] && codes["user"], "three seeded roles present")
 }
@@ -134,6 +137,54 @@ func TestSaveRole_UpdateNotFound(t *testing.T) {
 	assert.ErrorIs(t, err, ErrRoleNotFound)
 }
 
+func TestSaveRole_BuiltinCodeImmutable(t *testing.T) {
+	adminID := seedRoleID(t, "admin")
+	err := testSvc.SaveRole(testCtx, SaveRoleParams{ID: &adminID, Name: "管理员", Code: "renamed_admin"})
+	assert.ErrorIs(t, err, ErrBuiltinRoleCodeImmutable)
+
+	list, listErr := testSvc.ListRoles(testCtx)
+	require.NoError(t, listErr)
+	for _, role := range list {
+		if role.ID == adminID {
+			assert.Equal(t, "admin", role.Code)
+			assert.True(t, role.IsBuiltin)
+		}
+	}
+}
+
+func TestSaveRole_BuiltinNameCanChangeWhenCodeIsStable(t *testing.T) {
+	userID := seedRoleID(t, "user")
+	err := testSvc.SaveRole(testCtx, SaveRoleParams{ID: &userID, Name: "基础用户", Code: "user"})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = testSvc.SaveRole(testCtx, SaveRoleParams{ID: &userID, Name: "普通用户", Code: "user"})
+	})
+}
+
+func TestDeleteRoles_BuiltinProtected(t *testing.T) {
+	for _, code := range []string{"super_admin", "admin", "user"} {
+		err := testSvc.DeleteRoles(testCtx, []int64{seedRoleID(t, code)})
+		assert.ErrorIs(t, err, ErrBuiltinRoleDeleteProtected, "role %s", code)
+	}
+}
+
+func TestDeleteRoles_MixedBatchDoesNotPartiallyDelete(t *testing.T) {
+	require.NoError(t, testSvc.SaveRole(testCtx, SaveRoleParams{Name: "原子删除测试角色", Code: "atomic_delete_role"}))
+	customID := seedRoleID(t, "atomic_delete_role")
+	t.Cleanup(func() { _ = testSvc.DeleteRoles(testCtx, []int64{customID}) })
+
+	err := testSvc.DeleteRoles(testCtx, []int64{customID, seedRoleID(t, "admin")})
+	assert.ErrorIs(t, err, ErrBuiltinRoleDeleteProtected)
+
+	list, listErr := testSvc.ListRoles(testCtx)
+	require.NoError(t, listErr)
+	found := false
+	for _, role := range list {
+		found = found || role.ID == customID
+	}
+	assert.True(t, found, "custom role must remain after rejected batch")
+}
+
 func TestDeleteRoles_UnassignedOK(t *testing.T) {
 	err := testSvc.SaveRole(testCtx, SaveRoleParams{Name: "待删角色", Code: "to_delete"})
 	require.NoError(t, err)
@@ -156,12 +207,11 @@ func TestDeleteRoles_UnassignedOK(t *testing.T) {
 }
 
 func TestDeleteRoles_ReferencedByUser(t *testing.T) {
-	// Assign the seeded 'user' role to a user, then attempt to delete that role.
-	user, err := createTestUser(t, testSvc, SaveUserParams{Roles: []int64{seedRoleID(t, "user")}})
+	require.NoError(t, testSvc.SaveRole(testCtx, SaveRoleParams{Name: "关联角色", Code: "referenced_role"}))
+	roleID := seedRoleID(t, "referenced_role")
+	_, err := createTestUser(t, testSvc, SaveUserParams{Roles: []int64{roleID}})
 	require.NoError(t, err)
-	_ = user
 
-	roleID := seedRoleID(t, "user")
 	err = testSvc.DeleteRoles(testCtx, []int64{roleID})
 	assert.ErrorIs(t, err, ErrDeleteProtected)
 }
@@ -279,6 +329,16 @@ func TestDeleteDepartments_NotFound(t *testing.T) {
 	assert.ErrorIs(t, err, ErrDepartmentNotFound)
 }
 
+func TestDeleteDepartments_MixedBatchDoesNotPartiallyDelete(t *testing.T) {
+	require.NoError(t, testSvc.SaveDepartment(testCtx, SaveDepartmentParams{Name: "原子删除测试部门"}))
+	departmentID := seedDepartmentID(t, "原子删除测试部门")
+	t.Cleanup(func() { _ = testSvc.DeleteDepartments(testCtx, []int64{departmentID}) })
+
+	err := testSvc.DeleteDepartments(testCtx, []int64{departmentID, 999999})
+	assert.ErrorIs(t, err, ErrDepartmentNotFound)
+	assert.Equal(t, departmentID, seedDepartmentID(t, "原子删除测试部门"))
+}
+
 // --- users ---
 
 func TestSaveUser_CreateWithRoles(t *testing.T) {
@@ -356,6 +416,17 @@ func TestListUsers_PaginationAndFilter(t *testing.T) {
 func TestDeleteUsers_NotFound(t *testing.T) {
 	err := testSvc.DeleteUsers(testCtx, []int64{999999})
 	assert.ErrorIs(t, err, ErrUserNotFound)
+}
+
+func TestDeleteUsers_MixedBatchDoesNotPartiallyDelete(t *testing.T) {
+	userID, err := createTestUser(t, testSvc, SaveUserParams{Roles: []int64{seedRoleID(t, "user")}})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = testSvc.DeleteUsers(testCtx, []int64{userID}) })
+
+	err = testSvc.DeleteUsers(testCtx, []int64{userID, 999999})
+	assert.ErrorIs(t, err, ErrUserNotFound)
+	_, lookupErr := testSvc.q.GetUserByID(testCtx, userID)
+	require.NoError(t, lookupErr, "user must remain after rejected batch")
 }
 
 func TestDeleteUsers_OK(t *testing.T) {

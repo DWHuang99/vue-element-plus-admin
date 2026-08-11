@@ -8,14 +8,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/hdw/vue-element-plus-admin/backend/internal/auth"
+	"github.com/hdw/vue-element-plus-admin/backend/internal/app/adminapi"
 	"github.com/hdw/vue-element-plus-admin/backend/internal/config"
 	"github.com/hdw/vue-element-plus-admin/backend/internal/database"
-	"github.com/hdw/vue-element-plus-admin/backend/internal/health"
 	"github.com/hdw/vue-element-plus-admin/backend/internal/logging"
-	"github.com/hdw/vue-element-plus-admin/backend/internal/middleware"
-	"github.com/hdw/vue-element-plus-admin/backend/internal/ratelimit"
-	"github.com/hdw/vue-element-plus-admin/backend/internal/rbac"
 	"github.com/hdw/vue-element-plus-admin/backend/internal/server"
 )
 
@@ -65,7 +61,56 @@ func main() {
 
 	logger.Info("database migrations completed")
 
-	// 5. Create HTTP server
+	// 5. Startup gates (US5, plan Phase 5.9 step 4): reject unsafe flag/mode
+	// combinations before any delete consumer/dispatcher/route acceptance.
+	// Same-physical-database consistency is enforced inside config.Validate;
+	// the bridge-mode check reads the live Platform-owned row.
+	if err := runStartupGates(ctx, cfg, db, logger); err != nil {
+		logger.Error("server failed to start", "error", err.Error())
+		os.Exit(1)
+	}
+
+	// 6. Assemble the composition root and activate the route switch
+	// (legacy monolith wiring by default; Admin BFF after T032).
+	app := adminapi.NewWire(db, logger, adminapi.Config{
+		AdminBFFRoutesEnabled: cfg.AdminBFF.RoutesEnabled,
+		// OUTBOX_DISPATCHER_ENABLED only reaches this point if the startup
+		// gates above accepted it (delegation + bridge mode=false).
+		OutboxDispatcherEnabled: cfg.Features.OutboxDispatcherEnabled,
+		// Shadow reads AND with the master switch (CapabilityEnabled); the
+		// BFF router replays pure reads through the legacy router (T075).
+		ShadowReadsEnabled: cfg.AdminBFF.CapabilityEnabled(cfg.AdminBFF.ShadowReadsEnabled),
+		// Legacy delete delegation (T076): the legacy /users/delete route
+		// delegates to IAM instead of direct-deleting. The startup gates
+		// already enforced delegation=true before this point for any
+		// delete-path component.
+		LegacyDeleteIAMDelegationEnabled: cfg.Features.LegacyDeleteIAMDelegationEnabled,
+		// Rollout gate (T077): the capability manifest hash fingerprints the
+		// deployed capability set (sorted FLAG=value), proving every gate
+		// sample corresponds to the deployed manifest (plan Phase 5.9 step 6).
+		RolloutGate: adminapi.RolloutGateRuntime{
+			Enabled:                cfg.RolloutGate.Enabled,
+			SampleCadence:          cfg.RolloutGate.SampleCadence,
+			MaxGapInterval:         cfg.RolloutGate.MaxGapInterval,
+			Phase:                  cfg.RolloutGate.Phase,
+			PrincipalID:            cfg.RolloutGate.PrincipalID,
+			RollbackArtifactID:     cfg.RolloutGate.RollbackArtifactID,
+			RollbackSuiteResult:    cfg.RolloutGate.RollbackSuiteResult,
+			CapabilityManifestHash: adminapi.CapabilityManifestHash(capabilityManifest(cfg)),
+		},
+	}, cfg.CORS.AllowedOrigins, server.LegacyRateLimitConfig{
+		Enabled:        cfg.RateLimit.Enabled,
+		RegisterIPHour: cfg.RateLimit.RegisterIPHour,
+		LoginIP15Min:   cfg.RateLimit.LoginIP15Min,
+		LoginUser15Min: cfg.RateLimit.LoginUser15Min,
+	})
+	router, closeRatelimiters := app.Router()
+	defer closeRatelimiters()
+
+	// 7. Start background loops (outbox dispatcher) once gates have passed.
+	app.StartBackground(ctx)
+
+	// 6. Create HTTP server wrapping the router.
 	srvCfg := server.Config{
 		Host:         cfg.Server.Host,
 		Port:         cfg.Server.Port,
@@ -73,72 +118,7 @@ func main() {
 		WriteTimeout: cfg.Server.WriteTimeout,
 		IdleTimeout:  cfg.Server.IdleTimeout,
 	}
-
-	srv := server.New(srvCfg, logger)
-
-	// 6. Register middleware and routes
-	router := srv.Router()
-	router.Use(middleware.RequestID())
-	router.Use(middleware.CORS(cfg.CORS.AllowedOrigins))
-
-	healthHandler := health.NewHandler(db, logger)
-	router.GET("/health/live", healthHandler.Live)
-	router.GET("/health/ready", healthHandler.Ready)
-
-	// 6b. Auth routes under /api/v1/auth
-	authSvc := auth.NewAuthService(db.Pool)
-	authHandler := auth.NewHandler(authSvc, logger)
-
-	// Rate limiters (config-controlled; disabled when RATE_LIMIT_ENABLED=false).
-	registerLimiter := ratelimit.New(ratelimit.Config{
-		Enabled:  cfg.RateLimit.Enabled,
-		Limit:    cfg.RateLimit.RegisterIPHour,
-		Duration: time.Hour,
-	})
-	defer registerLimiter.Close()
-
-	loginIPLimiter := ratelimit.New(ratelimit.Config{
-		Enabled:  cfg.RateLimit.Enabled,
-		Limit:    cfg.RateLimit.LoginIP15Min,
-		Duration: 15 * time.Minute,
-	})
-	defer loginIPLimiter.Close()
-
-	loginUserLimiter := ratelimit.New(ratelimit.Config{
-		Enabled:  cfg.RateLimit.Enabled,
-		Limit:    cfg.RateLimit.LoginUser15Min,
-		Duration: 15 * time.Minute,
-	})
-	defer loginUserLimiter.Close()
-
-	authGroup := router.Group("/api/v1/auth")
-	{
-		authGroup.POST("/register", ratelimit.GinIPRateLimit(registerLimiter), authHandler.Register)
-		authGroup.POST("/login",
-			ratelimit.GinIPRateLimit(loginIPLimiter),
-			ratelimit.GinUsernameRateLimit(loginUserLimiter),
-			authHandler.Login)
-		authGroup.POST("/logout", middleware.BearerToken(), authHandler.Logout)
-		authGroup.GET("/me", middleware.Auth(authSvc), authHandler.Me)
-	}
-
-	// 6c. RBAC routes under /api/v1 (departments/roles/users), auth-protected.
-	rbacSvc := rbac.NewRBACService(db.Pool)
-	rbacHandler := rbac.NewHandler(rbacSvc, logger)
-
-	rbacGroup := router.Group("/api/v1")
-	rbacGroup.Use(middleware.Auth(authSvc))
-	{
-		rbacGroup.GET("/roles", rbacHandler.ListRoles)
-		rbacGroup.POST("/roles", rbacHandler.SaveRole)
-		rbacGroup.POST("/roles/delete", rbacHandler.DeleteRoles)
-		rbacGroup.GET("/departments", rbacHandler.ListDepartments)
-		rbacGroup.POST("/departments", rbacHandler.SaveDepartment)
-		rbacGroup.POST("/departments/delete", rbacHandler.DeleteDepartments)
-		rbacGroup.GET("/users", rbacHandler.ListUsers)
-		rbacGroup.POST("/users", rbacHandler.SaveUser)
-		rbacGroup.POST("/users/delete", rbacHandler.DeleteUsers)
-	}
+	srv := server.NewWithRouter(srvCfg, logger, router)
 
 	// 7. Start server (blocking call in goroutine)
 	go func() {
@@ -164,5 +144,26 @@ func main() {
 		logger.Error("server forced to shutdown", "error", err.Error())
 	} else {
 		logger.Info("server stopped")
+	}
+}
+
+// capabilityManifest builds the deployed capability set for the T077
+// rollout-gate manifest hash: the BFF master switch, every granular BFF
+// capability and the module feature toggles (quickstart §9 staged order).
+// The hash is computed over sorted FLAG=value lines by
+// adminapi.CapabilityManifestHash.
+func capabilityManifest(cfg *config.Config) map[string]bool {
+	return map[string]bool{
+		"ADMIN_BFF_ROUTES_ENABLED":              cfg.AdminBFF.RoutesEnabled,
+		"ADMIN_BFF_SHADOW_READS":                cfg.AdminBFF.ShadowReadsEnabled,
+		"ADMIN_BFF_AUTH_PROFILE_READS_ENABLED":  cfg.AdminBFF.AuthProfileReadsEnabled,
+		"ADMIN_BFF_USER_LIST_READS_ENABLED":     cfg.AdminBFF.UserListReadsEnabled,
+		"ADMIN_BFF_DEPARTMENT_WRITES_ENABLED":   cfg.AdminBFF.DepartmentWritesEnabled,
+		"ADMIN_BFF_ROLE_WRITES_ENABLED":         cfg.AdminBFF.RoleWritesEnabled,
+		"ADMIN_BFF_MANAGED_USER_WRITES_ENABLED": cfg.AdminBFF.ManagedUserWritesEnabled,
+		"ADMIN_BFF_USER_DELETE_ROUTE_ENABLED":   cfg.AdminBFF.UserDeleteRouteEnabled,
+		"LEGACY_DELETE_IAM_DELEGATION_ENABLED":  cfg.Features.LegacyDeleteIAMDelegationEnabled,
+		"IAM_DELETE_EVENT_CONSUMER_ENABLED":     cfg.Features.IAMDeleteEventConsumerEnabled,
+		"OUTBOX_DISPATCHER_ENABLED":             cfg.Features.OutboxDispatcherEnabled,
 	}
 }

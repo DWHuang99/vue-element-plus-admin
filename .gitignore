@@ -22,3 +22,7 @@ stats.html
 
 # dev.sh 运行日志
 .dev/
+
+# 编译产物 / 调试二进制
+backend/server
+__debug_bin*
