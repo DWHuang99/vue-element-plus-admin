@@ -1,0 +1,70 @@
+name: vue-element-plus-admin-backend
+
+services:
+  postgres:
+    image: postgres:latest
+    pull_policy: never
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-vue_admin}
+      POSTGRES_USER: ${POSTGRES_USER:-vue_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vue_admin_dev}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    image: migrate/migrate:v4.19.1
+    profiles: ["tools"]
+    volumes:
+      - ./migrations:/migrations:ro
+    command:
+      - "-path=/migrations"
+      - "-database=postgres://${POSTGRES_USER:-vue_admin}:${POSTGRES_PASSWORD:-vue_admin_dev}@postgres:5432/${POSTGRES_DB:-vue_admin}?sslmode=disable"
+      - "up"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build: .
+    ports:
+      - "${API_PORT:-8080}:8080"
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-vue_admin}:${POSTGRES_PASSWORD:-vue_admin_dev}@postgres:5432/${POSTGRES_DB:-vue_admin}?sslmode=disable
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ACCESS_TOKEN_EXPIRE_MS: ${JWT_ACCESS_TOKEN_EXPIRE_MS:-900000}
+      JWT_REFRESH_TOKEN_EXPIRE_MS: ${JWT_REFRESH_TOKEN_EXPIRE_MS:-604800000}
+      REDIS_ADDR: redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_DB: ${REDIS_DB:-0}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+  
+  redis:
+    image: redis:7.4
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    mem_limit: 96m
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:

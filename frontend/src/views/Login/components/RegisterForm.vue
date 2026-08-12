@@ -7,11 +7,13 @@ import { ElInput, FormRules } from 'element-plus'
 import { useValidator } from '@/hooks/web/useValidator'
 import { BaseButton } from '@/components/Button'
 import { IAgree } from '@/components/IAgree'
+import { registerApi } from '@/api/login'
+import type { RegisterType } from '@/api/login/types'
 
 const emit = defineEmits(['to-login'])
 
 const { formRegister, formMethods } = useForm()
-const { getElFormExpose } = formMethods
+const { getElFormExpose, getFormData } = formMethods
 
 const { t } = useI18n()
 
@@ -196,6 +198,8 @@ const loginRegister = async () => {
     if (valid) {
       try {
         loading.value = true
+        const formData = await getFormData<RegisterType>()
+        await registerApi(formData)
         toLogin()
       } finally {
         loading.value = false
