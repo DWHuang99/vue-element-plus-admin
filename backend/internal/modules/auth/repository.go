@@ -10,16 +10,30 @@ type AuthRepository struct {
 	queries *db.Queries
 }
 
+type UserAuth struct {
+	PasswordHash string
+	IsActive     bool
+	RoleCode     string
+}
+
 func NewRepository(queries *db.Queries) *AuthRepository {
 	return &AuthRepository{queries: queries}
 }
 
 func (r *AuthRepository) GetUserByUsername(ctx context.Context, username string) (*db.User, error) {
-	user, err := r.queries.GetUserByUsername(ctx, username)
+	userRow, err := r.queries.GetUserByUsername(ctx, username)
 	if err != nil {
 		return nil, err
 	}
-	return &user, nil
+	user := &db.User{
+		ID:        userRow.ID,
+		Username:  userRow.Username,
+		RoleID:    userRow.RoleID,
+		IsActive:  userRow.IsActive,
+		CreatedAt: userRow.CreatedAt,
+		UpdatedAt: userRow.UpdatedAt,
+	}
+	return user, nil
 }
 
 func (r *AuthRepository) AddUser(ctx context.Context, userinfo db.AddUserParams) (*db.User, error) {
@@ -30,10 +44,14 @@ func (r *AuthRepository) AddUser(ctx context.Context, userinfo db.AddUserParams)
 	return &user, nil
 }
 
-func (r *AuthRepository) GetUserPassword(ctx context.Context, username string) (string, error) {
-	hash, err := r.queries.GetUserPassword(ctx, username)
+func (r *AuthRepository) GetUserAuthByUsername(ctx context.Context, username string) (*UserAuth, error) {
+	row, err := r.queries.GetUserAuthByUsername(ctx, username)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return hash, nil
+	return &UserAuth{
+		PasswordHash: row.PasswordHash,
+		IsActive:     row.IsActive,
+		RoleCode:     row.RoleCode,
+	}, nil
 }

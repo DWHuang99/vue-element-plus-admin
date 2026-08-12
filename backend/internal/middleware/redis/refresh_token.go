@@ -76,3 +76,10 @@ func RotateRefreshToken(client *redis.Client, ctx context.Context, oldRefreshTok
 
 	return newToken, username, nil
 }
+
+func DeleteRefreshToken(client *redis.Client, ctx context.Context, refreshToken string) error {
+	if err := client.Del(ctx, refreshTokenKey(refreshToken)).Err(); err != nil {
+		return fmt.Errorf("delete refresh token: %w", err)
+	}
+	return nil
+}

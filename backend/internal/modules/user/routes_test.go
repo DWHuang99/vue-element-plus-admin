@@ -1,0 +1,36 @@
+package user
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	jwtservice "vue-element-plus-admin/backend/internal/middleware/jwt"
+
+	"github.com/gin-gonic/gin"
+)
+
+func TestCurrentUserRoute(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	jwtManager := jwtservice.NewJWTManager("test-secret", "test-issuer", time.Minute, time.Hour)
+	token, err := jwtManager.GenerateToken("admin", []string{"admin"})
+	if err != nil {
+		t.Fatalf("GenerateToken() error = %v", err)
+	}
+	service := &currentUserServiceStub{user: &CurrentUser{Username: "admin", IsActive: true}}
+	router := gin.New()
+	RegisterUserRoutes(router.Group("/api/v1"), NewUserHandler(service), jwtManager)
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/users/me", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if service.username != "admin" {
+		t.Fatalf("service username = %q, want admin", service.username)
+	}
+}

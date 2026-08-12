@@ -49,8 +49,9 @@ async function unLock() {
 
 // 返回登录
 async function goLogin() {
-  const res = await loginOutApi().catch(() => {})
-  if (res) {
+  try {
+    await loginOutApi()
+  } finally {
     clear()
     tagsViewStore.delAllViews()
     resetRouter() // 重置静态路由表

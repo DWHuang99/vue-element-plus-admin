@@ -7,6 +7,7 @@ package db
 
 import (
 	"context"
+	"time"
 )
 
 const addUser = `-- name: AddUser :one
@@ -41,33 +42,71 @@ func (q *Queries) AddUser(ctx context.Context, arg AddUserParams) (User, error) 
 }
 
 const getUserByUsername = `-- name: GetUserByUsername :one
-SELECT id, username, password_hash, role_id, is_active, created_at, updated_at FROM users WHERE username = $1
+SELECT
+    u.id,
+    u.username,
+    u.role_id,
+    u.is_active,
+    u.created_at,
+    u.updated_at,
+    r.code AS role_code,
+    r.name AS role_name,
+    r.permissions
+FROM users AS u
+JOIN roles AS r ON r.id = u.role_id
+WHERE u.username = $1
 `
 
-func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User, error) {
+type GetUserByUsernameRow struct {
+	ID          int64     `json:"id"`
+	Username    string    `json:"username"`
+	RoleID      int64     `json:"role_id"`
+	IsActive    bool      `json:"is_active"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+	RoleCode    string    `json:"role_code"`
+	RoleName    string    `json:"role_name"`
+	Permissions []string  `json:"permissions"`
+}
+
+func (q *Queries) GetUserByUsername(ctx context.Context, username string) (GetUserByUsernameRow, error) {
 	row := q.db.QueryRowContext(ctx, getUserByUsername, username)
-	var i User
+	var i GetUserByUsernameRow
 	err := row.Scan(
 		&i.ID,
 		&i.Username,
-		&i.PasswordHash,
 		&i.RoleID,
 		&i.IsActive,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.RoleCode,
+		&i.RoleName,
+		&i.Permissions,
 	)
 	return i, err
 }
 
-const getUserPassword = `-- name: GetUserPassword :one
-select password_hash from users where username = $1
+const getUserAuthByUsername = `-- name: GetUserAuthByUsername :one
+SELECT
+    u.password_hash,
+    u.is_active,
+    r.code AS role_code
+FROM users AS u
+JOIN roles AS r ON r.id = u.role_id
+WHERE u.username = $1
 `
 
-func (q *Queries) GetUserPassword(ctx context.Context, username string) (string, error) {
-	row := q.db.QueryRowContext(ctx, getUserPassword, username)
-	var password_hash string
-	err := row.Scan(&password_hash)
-	return password_hash, err
+type GetUserAuthByUsernameRow struct {
+	PasswordHash string `json:"password_hash"`
+	IsActive     bool   `json:"is_active"`
+	RoleCode     string `json:"role_code"`
+}
+
+func (q *Queries) GetUserAuthByUsername(ctx context.Context, username string) (GetUserAuthByUsernameRow, error) {
+	row := q.db.QueryRowContext(ctx, getUserAuthByUsername, username)
+	var i GetUserAuthByUsernameRow
+	err := row.Scan(&i.PasswordHash, &i.IsActive, &i.RoleCode)
+	return i, err
 }
 
 const ping = `-- name: Ping :one

@@ -2,7 +2,19 @@
 SELECT 1;
 
 -- name: GetUserByUsername :one
-SELECT * FROM users WHERE username = $1;
+SELECT
+    u.id,
+    u.username,
+    u.role_id,
+    u.is_active,
+    u.created_at,
+    u.updated_at,
+    r.code AS role_code,
+    r.name AS role_name,
+    r.permissions
+FROM users AS u
+JOIN roles AS r ON r.id = u.role_id
+WHERE u.username = $1;
 
 -- name: AddUser :one
 INSERT INTO
@@ -13,5 +25,11 @@ INSERT INTO
     )
 VALUES ($1, $2, $3) RETURNING *;
 
--- name: GetUserPassword :one
-select password_hash from users where username = $1;
+-- name: GetUserAuthByUsername :one
+SELECT
+    u.password_hash,
+    u.is_active,
+    r.code AS role_code
+FROM users AS u
+JOIN roles AS r ON r.id = u.role_id
+WHERE u.username = $1;

@@ -7,7 +7,7 @@ import (
 	"vue-element-plus-admin/backend/internal/dto/response"
 	jwtservice "vue-element-plus-admin/backend/internal/middleware/jwt"
 	rdb "vue-element-plus-admin/backend/internal/middleware/redis"
-	"vue-element-plus-admin/backend/internal/modules/auth"
+	apirouter "vue-element-plus-admin/backend/internal/router"
 
 	"github.com/gin-gonic/gin"
 )
@@ -21,11 +21,13 @@ func main() {
 
 	queries, database := dbconnect.Connect(ctx, DbConfig)
 	rdbClient := rdb.ConnectRedis(ctx, redisConfig)
+	jwtmanager := jwtservice.CreateJWTManager(jwtConfig)
 
 	defer database.Close()
 	defer rdbClient.Close()
 
 	router := gin.Default()
+	api := router.Group("/api/v1")
 
 	router.GET("/ping", func(c *gin.Context) {
 		response.Success(c, gin.H{
@@ -33,17 +35,11 @@ func main() {
 		})
 	})
 
-	api := router.Group("/api/v1")
-
-	auth.RegisterAuthRoutes(
-		api, auth.NewAuthHandler(
-			auth.NewService(
-				auth.NewRepository(queries),
-				jwtservice.CreateJWTManager(jwtConfig),
-				rdbClient,
-			),
-			cookieConfig.Secure,
-		),
+	apirouter.AuthRouter(
+		api, queries, jwtmanager, rdbClient, cookieConfig.Secure,
+	)
+	apirouter.UserRouter(
+		api, queries, jwtmanager,
 	)
 
 	router.Run()

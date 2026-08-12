@@ -4,12 +4,12 @@ import { Form, FormSchema } from '@/components/Form'
 import { useI18n } from '@/hooks/web/useI18n'
 import { ElCheckbox, ElLink, ElAlert } from 'element-plus'
 import { useForm } from '@/hooks/web/useForm'
-import { loginApi, getTestRoleApi, getAdminRoleApi } from '@/api/login'
+import { loginApi, getCurrentUserApi, getTestRoleApi, getAdminRoleApi } from '@/api/login'
 import { useAppStore } from '@/store/modules/app'
 import { usePermissionStore } from '@/store/modules/permission'
 import { useRouter } from 'vue-router'
 import type { RouteLocationNormalizedLoaded, RouteRecordRaw } from 'vue-router'
-import { UserType } from '@/api/login/types'
+import type { UserLoginType } from '@/api/login/types'
 import { useValidator } from '@/hooks/web/useValidator'
 import { Icon } from '@/components/Icon'
 import { useUserStore } from '@/store/modules/user'
@@ -242,6 +242,12 @@ const hoverColor = 'var(--el-color-primary)'
 
 const redirect = ref<string>('')
 
+const getRedirectPath = () => {
+  return redirect.value && redirect.value !== '/404'
+    ? redirect.value
+    : permissionStore.addRouters[0]?.path || '/'
+}
+
 watch(
   () => currentRoute.value,
   (route: RouteLocationNormalizedLoaded) => {
@@ -269,7 +275,7 @@ const signIn = async () => {
     if (isValid) {
       loading.value = true
       errorMessage.value = ''
-      const formData = await getFormData<UserType>()
+      const formData = await getFormData<UserLoginType>()
 
       try {
         const res = await loginApi(formData)
@@ -282,20 +288,24 @@ const signIn = async () => {
             userStore.setLoginInfo(undefined)
           }
           userStore.setRememberMe(unref(remember))
-          userStore.setUserInfo(res.data)
+          userStore.setToken(res.data.accessToken)
+          const currentUser = await getCurrentUserApi()
+          userStore.setUserInfo(currentUser.data)
           // 是否使用动态路由
           if (appStore.getDynamicRouter) {
-            getRole()
+            await getRole()
           } else {
             await permissionStore.generateRoutes('static').catch(() => {})
             permissionStore.getAddRouters.forEach((route) => {
               addRoute(route as RouteRecordRaw) // 动态添加可访问路由表
             })
             permissionStore.setIsAddRouters(true)
-            push({ path: redirect.value || permissionStore.addRouters[0].path })
+            push({ path: getRedirectPath() })
           }
         }
       } catch (error: any) {
+        userStore.setToken('')
+        userStore.setUserInfo(undefined)
         errorMessage.value = error?.message || '登录失败，请检查用户名和密码'
       } finally {
         loading.value = false
@@ -306,9 +316,8 @@ const signIn = async () => {
 
 // 获取角色信息
 const getRole = async () => {
-  const formData = await getFormData<UserType>()
   const params = {
-    roleName: formData.username
+    roleName: userStore.getUserInfo!.username
   }
   const res =
     appStore.getDynamicRouter && appStore.getServerDynamicRouter
@@ -325,7 +334,7 @@ const getRole = async () => {
       addRoute(route as RouteRecordRaw) // 动态添加可访问路由表
     })
     permissionStore.setIsAddRouters(true)
-    push({ path: redirect.value || permissionStore.addRouters[0].path })
+    push({ path: getRedirectPath() })
   }
 }
 

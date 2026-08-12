@@ -7,6 +7,7 @@ import { usePermissionStoreWithOut } from '@/store/modules/permission'
 import { usePageLoading } from '@/hooks/web/usePageLoading'
 import { NO_REDIRECT_WHITE_LIST } from '@/constants'
 import { useUserStoreWithOut } from '@/store/modules/user'
+import { getAdminRoleApi, getCurrentUserApi, getTestRoleApi } from '@/api/login'
 
 const { start, done } = useNProgress()
 
@@ -18,6 +19,18 @@ router.beforeEach(async (to, from, next) => {
   const permissionStore = usePermissionStoreWithOut()
   const appStore = useAppStoreWithOut()
   const userStore = useUserStoreWithOut()
+
+  if (!userStore.getUserInfo && userStore.getToken) {
+    try {
+      const currentUser = await getCurrentUserApi()
+      userStore.setUserInfo(currentUser.data)
+    } catch {
+      userStore.setToken('')
+      userStore.setUserInfo(undefined)
+      userStore.setRoleRouters([])
+    }
+  }
+
   if (userStore.getUserInfo) {
     if (to.path === '/login') {
       next({ path: '/' })
@@ -28,11 +41,21 @@ router.beforeEach(async (to, from, next) => {
       }
 
       // 开发者可根据实际情况进行修改
-      const roleRouters = userStore.getRoleRouters || []
+      let roleRouters = userStore.getRoleRouters || []
+
+      // 浏览器保留了登录信息，但没有角色路由时重新获取，避免首页进入 404。
+      if (appStore.getDynamicRouter && roleRouters.length === 0) {
+        const params = { roleName: userStore.getUserInfo.username }
+        const res = appStore.getServerDynamicRouter
+          ? await getAdminRoleApi(params)
+          : await getTestRoleApi(params)
+        roleRouters = res.data || []
+        userStore.setRoleRouters(roleRouters)
+      }
 
       // 是否使用动态路由
       if (appStore.getDynamicRouter) {
-        appStore.serverDynamicRouter
+        appStore.getServerDynamicRouter
           ? await permissionStore.generateRoutes('server', roleRouters as AppCustomRouteRecordRaw[])
           : await permissionStore.generateRoutes('frontEnd', roleRouters as string[])
       } else {

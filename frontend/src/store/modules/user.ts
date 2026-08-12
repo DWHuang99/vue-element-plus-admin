@@ -69,8 +69,9 @@ export const useUserStore = defineStore('user', {
         type: 'warning'
       })
         .then(async () => {
-          const res = await loginOutApi().catch(() => {})
-          if (res) {
+          try {
+            await loginOutApi()
+          } finally {
             this.reset()
           }
         })
@@ -94,7 +95,12 @@ export const useUserStore = defineStore('user', {
       this.loginInfo = loginInfo
     }
   },
-  persist: true
+  persist: [
+    {
+      pick: ['token', 'tokenKey', 'roleRouters', 'rememberMe', 'loginInfo'],
+      storage: localStorage
+    }
+  ]
 })
 
 export const useUserStoreWithOut = () => {

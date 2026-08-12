@@ -4,10 +4,25 @@ export interface UserLoginType {
 }
 
 export interface UserType {
+  id: number
   username: string
-  password: string
-  role: string
-  roleId: string
+  roleId: number
+  roleCode: string
+  roleName: string
+  permissions: string[]
+  isActive: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export interface LoginResponse {
+  accessToken: string
+  exist: boolean
+  message: string
+}
+
+export interface RefreshResponse {
+  accessToken: string
 }
 
 export interface RegisterType {

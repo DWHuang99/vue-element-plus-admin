@@ -4,6 +4,8 @@ import { defaultRequestInterceptors, defaultResponseInterceptors } from './confi
 import { AxiosInstance, InternalAxiosRequestConfig, RequestConfig, AxiosResponse } from './types'
 import { ElMessage } from 'element-plus'
 import { REQUEST_TIMEOUT } from '@/constants'
+import { useUserStoreWithOut } from '@/store/modules/user'
+import type { RefreshResponse } from '@/api/login/types'
 
 export const PATH_URL = import.meta.env.VITE_API_BASE_PATH
 
@@ -11,8 +13,39 @@ const abortControllerMap: Map<string, AbortController> = new Map()
 
 const axiosInstance: AxiosInstance = axios.create({
   timeout: REQUEST_TIMEOUT,
-  baseURL: PATH_URL
+  baseURL: PATH_URL,
+  withCredentials: true
 })
+
+const refreshClient = axios.create({
+  timeout: REQUEST_TIMEOUT,
+  baseURL: PATH_URL,
+  withCredentials: true
+})
+
+interface RetryRequestConfig extends InternalAxiosRequestConfig {
+  _retry?: boolean
+}
+
+let refreshRequest: Promise<string> | null = null
+
+const requestNewAccessToken = () => {
+  if (!refreshRequest) {
+    refreshRequest = refreshClient
+      .post<IResponse<RefreshResponse>>('/api/v1/auth/refresh')
+      .then((response) => {
+        if (response.data.code !== 0 || !response.data.data?.accessToken) {
+          throw new Error('refresh access token failed')
+        }
+        return response.data.data.accessToken
+      })
+      .finally(() => {
+        refreshRequest = null
+      })
+  }
+
+  return refreshRequest
+}
 
 axiosInstance.interceptors.request.use((res: InternalAxiosRequestConfig) => {
   const controller = new AbortController()
@@ -33,14 +66,40 @@ axiosInstance.interceptors.response.use(
     return res
   },
   (error: AxiosError) => {
-    console.log('err： ' + error) // for debug
-    ElMessage.error(error.message)
     return Promise.reject(error)
   }
 )
 
 axiosInstance.interceptors.request.use(defaultRequestInterceptors)
 axiosInstance.interceptors.response.use(defaultResponseInterceptors)
+axiosInstance.interceptors.response.use(undefined, async (error: AxiosError<IResponse>) => {
+  const originalRequest = error.config as RetryRequestConfig | undefined
+  const userStore = useUserStoreWithOut()
+  const isAuthEndpoint = originalRequest?.url?.startsWith('/api/v1/auth/') ?? false
+
+  if (
+    error.response?.status === 401 &&
+    originalRequest &&
+    !originalRequest._retry &&
+    !isAuthEndpoint &&
+    Boolean(userStore.getToken)
+  ) {
+    originalRequest._retry = true
+
+    try {
+      const accessToken = await requestNewAccessToken()
+      userStore.setToken(accessToken)
+      originalRequest.headers.Authorization = `Bearer ${accessToken}`
+      return axiosInstance.request(originalRequest)
+    } catch {
+      userStore.logout()
+      return Promise.reject(error)
+    }
+  }
+
+  ElMessage.error(error.response?.data?.message || error.message)
+  return Promise.reject(error)
+})
 
 const service = {
   request: (config: RequestConfig) => {

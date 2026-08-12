@@ -21,9 +21,19 @@ func NewAuthHandler(service *AuthService, cookieSecure bool) *AuthHandler {
 	}
 }
 
-const refreshCookiePath = "/api/v1/auth/refresh"
+const (
+	refreshCookiePath       = "/api/v1/auth"
+	legacyRefreshCookiePath = "/api/v1/auth/refresh"
+)
+
+func (h *AuthHandler) expireRefreshCookie(c *gin.Context, path string) {
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie("refresh_token", "", -1, path, "", h.cookieSecure, true)
+}
 
 func (h *AuthHandler) setRefreshCookie(c *gin.Context, refreshToken string) {
+	// Remove cookies created by versions that scoped the token to /refresh only.
+	h.expireRefreshCookie(c, legacyRefreshCookiePath)
 	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie(
 		"refresh_token",
@@ -34,6 +44,11 @@ func (h *AuthHandler) setRefreshCookie(c *gin.Context, refreshToken string) {
 		h.cookieSecure,
 		true,
 	)
+}
+
+func (h *AuthHandler) clearRefreshCookie(c *gin.Context) {
+	h.expireRefreshCookie(c, refreshCookiePath)
+	h.expireRefreshCookie(c, legacyRefreshCookiePath)
 }
 
 func (h *AuthHandler) Login(c *gin.Context) {
@@ -50,7 +65,9 @@ func (h *AuthHandler) Login(c *gin.Context) {
 			"exist":       exist,
 		})
 	} else {
-		if exist {
+		if errors.Is(err, ErrUserDisabled) {
+			response.Error(c, http.StatusForbidden, 40301, "user is disabled")
+		} else if exist || err != nil {
 			response.Error(c, http.StatusInternalServerError, 1, "accessToken/refreshToken generation failed")
 		} else {
 			response.Error(c, http.StatusUnauthorized, 1, "Login failed: password incorrect")
@@ -92,7 +109,25 @@ func (h *AuthHandler) Refresh(c *gin.Context) {
 		response.Success(c, gin.H{"accessToken": accessToken})
 	case errors.Is(err, ErrInvalidRefreshToken):
 		response.Error(c, http.StatusUnauthorized, 1, "Refresh failed: invalid refresh token")
+	case errors.Is(err, ErrUserDisabled):
+		response.Error(c, http.StatusForbidden, 40301, "user is disabled")
 	default:
 		response.Error(c, http.StatusInternalServerError, 10500, "internal server error")
 	}
+}
+
+func (h *AuthHandler) Logout(c *gin.Context) {
+	refreshToken, err := c.Cookie("refresh_token")
+
+	// Logout is idempotent: a missing or expired cookie is already logged out.
+	if err == nil && refreshToken != "" {
+		if err := h.service.Logout(c.Request.Context(), refreshToken); err != nil {
+			h.clearRefreshCookie(c)
+			response.Error(c, http.StatusInternalServerError, 10500, "internal server error")
+			return
+		}
+	}
+
+	h.clearRefreshCookie(c)
+	response.Success(c, nil)
 }
