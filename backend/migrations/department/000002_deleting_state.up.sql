@@ -1,0 +1,2 @@
+ALTER TABLE departments
+    ADD COLUMN deleting BOOLEAN NOT NULL DEFAULT FALSE;

@@ -32,6 +32,7 @@ const formSchema = ref<FormSchema[]>([
     field: 'status',
     label: t('menu.status'),
     component: 'Select',
+    value: 1,
     componentProps: {
       options: [
         {

@@ -2,14 +2,14 @@
 import { Form, FormSchema } from '@/components/Form'
 import { useForm } from '@/hooks/web/useForm'
 import { PropType, reactive, watch } from 'vue'
-import { DepartmentUserItem } from '@/api/department/types'
+import { UserItem } from '@/api/user/types'
 import { useValidator } from '@/hooks/web/useValidator'
 
 const { required } = useValidator()
 
 const props = defineProps({
   currentRow: {
-    type: Object as PropType<DepartmentUserItem>,
+    type: Object as PropType<UserItem>,
     default: () => undefined
   },
   formSchema: {
@@ -21,7 +21,8 @@ const props = defineProps({
 const rules = reactive({
   username: [required()],
   account: [required()],
-  'department.id': [required()]
+  'department.id': [required()],
+  roleId: [required()]
 })
 
 const { formRegister, formMethods } = useForm()

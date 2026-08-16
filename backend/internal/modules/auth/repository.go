@@ -2,8 +2,9 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 
-	db "vue-element-plus-admin/backend/internal/database/generated"
+	db "vue-element-plus-admin/backend/internal/database/iam/generated"
 )
 
 type AuthRepository struct {
@@ -11,37 +12,35 @@ type AuthRepository struct {
 }
 
 type UserAuth struct {
+	ID           int64
 	PasswordHash string
 	IsActive     bool
 	RoleCode     string
+	Permissions  []string
 }
 
 func NewRepository(queries *db.Queries) *AuthRepository {
 	return &AuthRepository{queries: queries}
 }
 
-func (r *AuthRepository) GetUserByUsername(ctx context.Context, username string) (*db.User, error) {
-	userRow, err := r.queries.GetUserByUsername(ctx, username)
+func (r *AuthRepository) AddUser(ctx context.Context, username, passwordHash, roleCode string) (*db.User, error) {
+	row, err := r.queries.AddUserByRoleCode(ctx, db.AddUserByRoleCodeParams{
+		Username:     username,
+		PasswordHash: passwordHash,
+		Code:         roleCode,
+	})
 	if err != nil {
 		return nil, err
 	}
-	user := &db.User{
-		ID:        userRow.ID,
-		Username:  userRow.Username,
-		RoleID:    userRow.RoleID,
-		IsActive:  userRow.IsActive,
-		CreatedAt: userRow.CreatedAt,
-		UpdatedAt: userRow.UpdatedAt,
-	}
-	return user, nil
-}
-
-func (r *AuthRepository) AddUser(ctx context.Context, userinfo db.AddUserParams) (*db.User, error) {
-	user, err := r.queries.AddUser(ctx, userinfo)
-	if err != nil {
-		return nil, err
-	}
-	return &user, nil
+	return &db.User{
+		ID:           row.ID,
+		Username:     row.Username,
+		PasswordHash: row.PasswordHash,
+		RoleID:       row.RoleID,
+		IsActive:     row.IsActive,
+		CreatedAt:    row.CreatedAt,
+		UpdatedAt:    row.UpdatedAt,
+	}, nil
 }
 
 func (r *AuthRepository) GetUserAuthByUsername(ctx context.Context, username string) (*UserAuth, error) {
@@ -49,9 +48,33 @@ func (r *AuthRepository) GetUserAuthByUsername(ctx context.Context, username str
 	if err != nil {
 		return nil, err
 	}
+	var permissions []string
+	if err := json.Unmarshal([]byte(row.PermissionsJson), &permissions); err != nil {
+		return nil, err
+	}
 	return &UserAuth{
+		ID:           row.ID,
 		PasswordHash: row.PasswordHash,
 		IsActive:     row.IsActive,
 		RoleCode:     row.RoleCode,
+		Permissions:  permissions,
+	}, nil
+}
+
+func (r *AuthRepository) GetUserAuthByID(ctx context.Context, userID int64) (*UserAuth, error) {
+	row, err := r.queries.GetUserAuthByID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	var permissions []string
+	if err := json.Unmarshal([]byte(row.PermissionsJson), &permissions); err != nil {
+		return nil, err
+	}
+	return &UserAuth{
+		ID:           row.ID,
+		PasswordHash: row.PasswordHash,
+		IsActive:     row.IsActive,
+		RoleCode:     row.RoleCode,
+		Permissions:  permissions,
 	}, nil
 }

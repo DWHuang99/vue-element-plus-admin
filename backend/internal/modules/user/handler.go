@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"vue-element-plus-admin/backend/internal/dto/response"
+	jwtservice "vue-element-plus-admin/backend/internal/middleware/jwt"
 
 	"github.com/gin-gonic/gin"
 )
@@ -15,7 +16,7 @@ type UserHandler struct {
 }
 
 type CurrentUserService interface {
-	GetUserByUsername(ctx context.Context, username string) (*CurrentUser, error)
+	GetUserByID(ctx context.Context, userID int64) (*CurrentUser, error)
 }
 
 func NewUserHandler(service CurrentUserService) *UserHandler {
@@ -39,19 +40,19 @@ func ToUserInfoResponse(user *CurrentUser) *response.UserInfo {
 }
 
 func (h *UserHandler) GetCurrentUser(c *gin.Context) {
-	usernameValue, exists := c.Get("username")
+	userIDValue, exists := c.Get(jwtservice.UserIDContextKey)
 	if !exists {
 		response.Error(c, http.StatusUnauthorized, 401, "user identity not found")
 		return
 	}
 
-	username, ok := usernameValue.(string)
-	if !ok || username == "" {
+	userID, ok := userIDValue.(int64)
+	if !ok || userID <= 0 {
 		response.Error(c, http.StatusUnauthorized, 401, "invalid user identity")
 		return
 	}
 
-	user, err := h.service.GetUserByUsername(c.Request.Context(), username)
+	user, err := h.service.GetUserByID(c.Request.Context(), userID)
 	if err != nil {
 		if errors.Is(err, ErrUserNotExists) {
 			response.Error(c, http.StatusNotFound, 40401, "user not found")

@@ -2,8 +2,9 @@ package user
 
 import (
 	"context"
+	"encoding/json"
 
-	db "vue-element-plus-admin/backend/internal/database/generated"
+	db "vue-element-plus-admin/backend/internal/database/iam/generated"
 )
 
 type UserRepository struct {
@@ -14,9 +15,13 @@ func NewRepository(queries *db.Queries) *UserRepository {
 	return &UserRepository{queries: queries}
 }
 
-func (r *UserRepository) GetUserByUsername(ctx context.Context, username string) (*CurrentUser, error) {
-	userRow, err := r.queries.GetUserByUsername(ctx, username)
+func (r *UserRepository) GetUserByID(ctx context.Context, userID int64) (*CurrentUser, error) {
+	userRow, err := r.queries.GetUserByID(ctx, userID)
 	if err != nil {
+		return nil, err
+	}
+	var permissions []string
+	if err := json.Unmarshal([]byte(userRow.PermissionsJson), &permissions); err != nil {
 		return nil, err
 	}
 	user := &CurrentUser{
@@ -25,7 +30,7 @@ func (r *UserRepository) GetUserByUsername(ctx context.Context, username string)
 		RoleID:      userRow.RoleID,
 		RoleCode:    userRow.RoleCode,
 		RoleName:    userRow.RoleName,
-		Permissions: userRow.Permissions,
+		Permissions: permissions,
 		IsActive:    userRow.IsActive,
 		CreatedAt:   userRow.CreatedAt,
 		UpdatedAt:   userRow.UpdatedAt,

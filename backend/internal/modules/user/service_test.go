@@ -2,10 +2,9 @@ package user
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
-
-	"github.com/jackc/pgx/v5"
 )
 
 type repositoryStub struct {
@@ -13,42 +12,42 @@ type repositoryStub struct {
 	err  error
 }
 
-func (s repositoryStub) GetUserByUsername(context.Context, string) (*CurrentUser, error) {
+func (s repositoryStub) GetUserByID(context.Context, int64) (*CurrentUser, error) {
 	return s.user, s.err
 }
 
-func TestGetUserByUsername(t *testing.T) {
+func TestGetUserByID(t *testing.T) {
 	t.Run("returns active user", func(t *testing.T) {
 		want := &CurrentUser{Username: "admin", IsActive: true}
 		service := NewService(repositoryStub{user: want})
 
-		got, err := service.GetUserByUsername(context.Background(), "admin")
+		got, err := service.GetUserByID(context.Background(), 1)
 
 		if err != nil {
-			t.Fatalf("GetUserByUsername() error = %v", err)
+			t.Fatalf("GetUserByID() error = %v", err)
 		}
 		if got != want {
-			t.Fatalf("GetUserByUsername() = %#v, want %#v", got, want)
+			t.Fatalf("GetUserByID() = %#v, want %#v", got, want)
 		}
 	})
 
 	t.Run("maps missing database row", func(t *testing.T) {
-		service := NewService(repositoryStub{err: pgx.ErrNoRows})
+		service := NewService(repositoryStub{err: sql.ErrNoRows})
 
-		_, err := service.GetUserByUsername(context.Background(), "missing")
+		_, err := service.GetUserByID(context.Background(), 999)
 
 		if !errors.Is(err, ErrUserNotExists) {
-			t.Fatalf("GetUserByUsername() error = %v, want %v", err, ErrUserNotExists)
+			t.Fatalf("GetUserByID() error = %v, want %v", err, ErrUserNotExists)
 		}
 	})
 
 	t.Run("rejects disabled user", func(t *testing.T) {
 		service := NewService(repositoryStub{user: &CurrentUser{Username: "disabled"}})
 
-		_, err := service.GetUserByUsername(context.Background(), "disabled")
+		_, err := service.GetUserByID(context.Background(), 2)
 
 		if !errors.Is(err, ErrUserDisabled) {
-			t.Fatalf("GetUserByUsername() error = %v, want %v", err, ErrUserDisabled)
+			t.Fatalf("GetUserByID() error = %v, want %v", err, ErrUserDisabled)
 		}
 	})
 }

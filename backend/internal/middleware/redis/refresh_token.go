@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -18,14 +19,14 @@ var ErrRefreshTokenNotFound = errors.New("refresh token not found")
 const refreshTokenPrefix = "refresh_token:"
 
 const rotateRefreshTokenScript = `
-local username = redis.call('GET', KEYS[1])
-if not username then
+local user_id = redis.call('GET', KEYS[1])
+if not user_id then
     return false
 end
 
 redis.call('DEL', KEYS[1])
-redis.call('SET', KEYS[2], username, 'PX', ARGV[1])
-return username
+redis.call('SET', KEYS[2], user_id, 'PX', ARGV[1])
+return user_id
 `
 
 func newRefreshToken() (string, error) {
@@ -42,39 +43,45 @@ func refreshTokenKey(refreshToken string) string {
 	return refreshTokenPrefix + hex.EncodeToString(digest[:])
 }
 
-func CreateRefreshToken(client *redis.Client, ctx context.Context, username string, ttl time.Duration) (string, error) {
+func CreateRefreshToken(client *redis.Client, ctx context.Context, userID int64, ttl time.Duration) (string, error) {
 	refreshToken, err := newRefreshToken()
 	if err != nil {
 		return "", err
 	}
 
-	if err := client.Set(ctx, refreshTokenKey(refreshToken), username, ttl).Err(); err != nil {
+	if err := client.Set(ctx, refreshTokenKey(refreshToken), strconv.FormatInt(userID, 10), ttl).Err(); err != nil {
 		return "", fmt.Errorf("store refresh token: %w", err)
 	}
 
 	return refreshToken, nil
 }
 
-func RotateRefreshToken(client *redis.Client, ctx context.Context, oldRefreshToken string, ttl time.Duration) (string, string, error) {
+func RotateRefreshToken(client *redis.Client, ctx context.Context, oldRefreshToken string, ttl time.Duration) (string, int64, error) {
 	newToken, err := newRefreshToken()
 	if err != nil {
-		return "", "", err
+		return "", 0, err
 	}
 
-	username, err := client.Eval(
+	userIDValue, err := client.Eval(
 		ctx,
 		rotateRefreshTokenScript,
 		[]string{refreshTokenKey(oldRefreshToken), refreshTokenKey(newToken)},
 		ttl.Milliseconds(),
 	).Text()
 	if errors.Is(err, redis.Nil) {
-		return "", "", ErrRefreshTokenNotFound
+		return "", 0, ErrRefreshTokenNotFound
 	}
 	if err != nil {
-		return "", "", fmt.Errorf("rotate refresh token: %w", err)
+		return "", 0, fmt.Errorf("rotate refresh token: %w", err)
 	}
 
-	return newToken, username, nil
+	userID, err := strconv.ParseInt(userIDValue, 10, 64)
+	if err != nil || userID <= 0 {
+		_ = client.Del(ctx, refreshTokenKey(newToken)).Err()
+		return "", 0, ErrRefreshTokenNotFound
+	}
+
+	return newToken, userID, nil
 }
 
 func DeleteRefreshToken(client *redis.Client, ctx context.Context, refreshToken string) error {

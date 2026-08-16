@@ -14,13 +14,13 @@ import (
 )
 
 type currentUserServiceStub struct {
-	user     *CurrentUser
-	err      error
-	username string
+	user   *CurrentUser
+	err    error
+	userID int64
 }
 
-func (s *currentUserServiceStub) GetUserByUsername(_ context.Context, username string) (*CurrentUser, error) {
-	s.username = username
+func (s *currentUserServiceStub) GetUserByID(_ context.Context, userID int64) (*CurrentUser, error) {
+	s.userID = userID
 	return s.user, s.err
 }
 
@@ -40,7 +40,7 @@ func TestGetCurrentUser(t *testing.T) {
 		handler := NewUserHandler(service)
 		router := gin.New()
 		router.GET("/me", func(c *gin.Context) {
-			c.Set("username", "admin")
+			c.Set("userID", int64(1))
 			handler.GetCurrentUser(c)
 		})
 
@@ -65,8 +65,8 @@ func TestGetCurrentUser(t *testing.T) {
 		if body.Data.RoleCode != "admin" || len(body.Data.Permissions) != 2 {
 			t.Fatalf("response user = %#v", body.Data)
 		}
-		if service.username != "admin" {
-			t.Fatalf("service username = %q, want admin", service.username)
+		if service.userID != 1 {
+			t.Fatalf("service user ID = %d, want 1", service.userID)
 		}
 	})
 
@@ -75,7 +75,7 @@ func TestGetCurrentUser(t *testing.T) {
 		handler := NewUserHandler(service)
 		router := gin.New()
 		router.GET("/me", func(c *gin.Context) {
-			c.Set("username", "disabled")
+			c.Set("userID", int64(2))
 			handler.GetCurrentUser(c)
 		})
 
@@ -100,7 +100,7 @@ func TestGetCurrentUser(t *testing.T) {
 		handler := NewUserHandler(service)
 		router := gin.New()
 		router.GET("/me", func(c *gin.Context) {
-			c.Set("username", "admin")
+			c.Set("userID", int64(1))
 			handler.GetCurrentUser(c)
 		})
 

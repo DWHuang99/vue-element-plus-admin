@@ -1,6 +1,8 @@
 package user
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -13,8 +15,20 @@ import (
 
 func TestCurrentUserRoute(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	jwtManager := jwtservice.NewJWTManager("test-secret", "test-issuer", time.Minute, time.Hour)
-	token, err := jwtManager.GenerateToken("admin", []string{"admin"})
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate RSA key: %v", err)
+	}
+	jwtManager := jwtservice.NewJWTManager(
+		privateKey,
+		&privateKey.PublicKey,
+		"test-key",
+		"test-issuer",
+		"test-api",
+		time.Minute,
+		time.Hour,
+	)
+	token, err := jwtManager.GenerateToken(1, []string{"admin"})
 	if err != nil {
 		t.Fatalf("GenerateToken() error = %v", err)
 	}
@@ -30,7 +44,7 @@ func TestCurrentUserRoute(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d: %s", recorder.Code, http.StatusOK, recorder.Body.String())
 	}
-	if service.username != "admin" {
-		t.Fatalf("service username = %q, want admin", service.username)
+	if service.userID != 1 {
+		t.Fatalf("service user ID = %d, want 1", service.userID)
 	}
 }

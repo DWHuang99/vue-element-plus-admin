@@ -1,55 +1,64 @@
 name: vue-element-plus-admin-backend
 
 services:
-  postgres:
+  iam-postgres:
     image: postgres:latest
     pull_policy: never
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-vue_admin}
-      POSTGRES_USER: ${POSTGRES_USER:-vue_admin}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vue_admin_dev}
+      POSTGRES_DB: ${IAM_POSTGRES_DB:-iam}
+      POSTGRES_USER: ${IAM_POSTGRES_USER:-iam_app}
+      POSTGRES_PASSWORD: ${IAM_POSTGRES_PASSWORD:-iam_dev_password}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "${IAM_POSTGRES_PORT:-5432}:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql
+      - iam_postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
       timeout: 5s
       retries: 10
 
-  migrate:
-    image: migrate/migrate:v4.19.1
-    profiles: ["tools"]
+  department-postgres:
+    image: postgres:latest
+    pull_policy: never
+    environment:
+      POSTGRES_DB: ${DEPARTMENT_POSTGRES_DB:-department}
+      POSTGRES_USER: ${DEPARTMENT_POSTGRES_USER:-department_app}
+      POSTGRES_PASSWORD: ${DEPARTMENT_POSTGRES_PASSWORD:-department_dev_password}
+    ports:
+      - "${DEPARTMENT_POSTGRES_PORT:-5433}:5432"
     volumes:
-      - ./migrations:/migrations:ro
+      - department_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  iam-migrate:
+    image: migrate/migrate:v4.19.1
+    volumes:
+      - ./migrations/iam:/migrations:ro
     command:
       - "-path=/migrations"
-      - "-database=postgres://${POSTGRES_USER:-vue_admin}:${POSTGRES_PASSWORD:-vue_admin_dev}@postgres:5432/${POSTGRES_DB:-vue_admin}?sslmode=disable"
+      - "-database=postgres://${IAM_POSTGRES_USER:-iam_app}:${IAM_POSTGRES_PASSWORD:-iam_dev_password}@iam-postgres:5432/${IAM_POSTGRES_DB:-iam}?sslmode=disable"
       - "up"
     depends_on:
-      postgres:
+      iam-postgres:
         condition: service_healthy
 
-  api:
-    build: .
-    ports:
-      - "${API_PORT:-8080}:8080"
-    environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-vue_admin}:${POSTGRES_PASSWORD:-vue_admin_dev}@postgres:5432/${POSTGRES_DB:-vue_admin}?sslmode=disable
-      JWT_SECRET: ${JWT_SECRET}
-      JWT_ACCESS_TOKEN_EXPIRE_MS: ${JWT_ACCESS_TOKEN_EXPIRE_MS:-900000}
-      JWT_REFRESH_TOKEN_EXPIRE_MS: ${JWT_REFRESH_TOKEN_EXPIRE_MS:-604800000}
-      REDIS_ADDR: redis:6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
-      REDIS_DB: ${REDIS_DB:-0}
-      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+  department-migrate:
+    image: migrate/migrate:v4.19.1
+    volumes:
+      - ./migrations/department:/migrations:ro
+    command:
+      - "-path=/migrations"
+      - "-database=postgres://${DEPARTMENT_POSTGRES_USER:-department_app}:${DEPARTMENT_POSTGRES_PASSWORD:-department_dev_password}@department-postgres:5432/${DEPARTMENT_POSTGRES_DB:-department}?sslmode=disable"
+      - "up"
     depends_on:
-      postgres:
+      department-postgres:
         condition: service_healthy
-      redis:
-        condition: service_healthy
-  
+
   redis:
     image: redis:7.4
     command: ["redis-server", "--appendonly", "yes"]
@@ -58,13 +67,95 @@ services:
     volumes:
       - redis_data:/data
     healthcheck:
-      test: [ "CMD", "redis-cli", "ping" ]
+      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
     mem_limit: 96m
     restart: unless-stopped
 
+  iam-api:
+    build:
+      context: .
+      target: iam
+    ports:
+      - "${IAM_API_PORT:-8081}:8080"
+    expose:
+      - "50051"
+    environment:
+      DATABASE_URL: postgres://${IAM_POSTGRES_USER:-iam_app}:${IAM_POSTGRES_PASSWORD:-iam_dev_password}@iam-postgres:5432/${IAM_POSTGRES_DB:-iam}?sslmode=disable
+      JWT_PRIVATE_KEY_PATH: /run/secrets/jwt_private_key
+      JWT_PUBLIC_KEY_PATH: /run/secrets/jwt_public_key
+      JWT_KEY_ID: ${JWT_KEY_ID:-key-2026-08}
+      JWT_ISSUER: ${JWT_ISSUER:-vue-element-plus-admin}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-vue-element-plus-admin-api}
+      JWT_ACCESS_TOKEN_EXPIRE_MS: ${JWT_ACCESS_TOKEN_EXPIRE_MS:-900000}
+      JWT_REFRESH_TOKEN_EXPIRE_MS: ${JWT_REFRESH_TOKEN_EXPIRE_MS:-604800000}
+      DEPARTMENT_GRPC_TARGET: department-api:50051
+      IAM_GRPC_ADDR: ":50051"
+      SERVICE_GRPC_TIMEOUT_MS: ${SERVICE_GRPC_TIMEOUT_MS:-3000}
+      REDIS_ADDR: redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_DB: ${REDIS_DB:-0}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+    secrets:
+      - jwt_private_key
+      - jwt_public_key
+    depends_on:
+      iam-migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  department-api:
+    build:
+      context: .
+      target: department
+    ports:
+      - "${DEPARTMENT_API_PORT:-8082}:8080"
+    expose:
+      - "50051"
+    environment:
+      DATABASE_URL: postgres://${DEPARTMENT_POSTGRES_USER:-department_app}:${DEPARTMENT_POSTGRES_PASSWORD:-department_dev_password}@department-postgres:5432/${DEPARTMENT_POSTGRES_DB:-department}?sslmode=disable
+      JWT_JWKS_URL: http://iam-api:8080/.well-known/jwks.json
+      JWT_ISSUER: ${JWT_ISSUER:-vue-element-plus-admin}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-vue-element-plus-admin-api}
+      DEPARTMENT_GRPC_ADDR: ":50051"
+      IAM_GRPC_TARGET: iam-api:50051
+      SERVICE_GRPC_TIMEOUT_MS: ${SERVICE_GRPC_TIMEOUT_MS:-3000}
+    depends_on:
+      department-migrate:
+        condition: service_completed_successfully
+      iam-api:
+        condition: service_started
+    restart: on-failure
+
+  gateway:
+    build:
+      context: .
+      target: gateway
+    ports:
+      - "${GATEWAY_PORT:-8080}:8080"
+    environment:
+      IAM_SERVICE_URL: http://iam-api:8080
+      DEPARTMENT_SERVICE_URL: http://department-api:8080
+      GATEWAY_DIAL_TIMEOUT_MS: ${GATEWAY_DIAL_TIMEOUT_MS:-1000}
+      GATEWAY_RESPONSE_HEADER_TIMEOUT_MS: ${GATEWAY_RESPONSE_HEADER_TIMEOUT_MS:-3000}
+      GATEWAY_READ_HEADER_TIMEOUT_MS: ${GATEWAY_READ_HEADER_TIMEOUT_MS:-2000}
+      GATEWAY_READ_TIMEOUT_MS: ${GATEWAY_READ_TIMEOUT_MS:-10000}
+      GATEWAY_WRITE_TIMEOUT_MS: ${GATEWAY_WRITE_TIMEOUT_MS:-10000}
+      GATEWAY_IDLE_TIMEOUT_MS: ${GATEWAY_IDLE_TIMEOUT_MS:-60000}
+    depends_on:
+      - iam-api
+      - department-api
+
 volumes:
-  postgres_data:
+  iam_postgres_data:
+  department_postgres_data:
   redis_data:
+
+secrets:
+  jwt_private_key:
+    file: ../private.pem
+  jwt_public_key:
+    file: ../public.pem

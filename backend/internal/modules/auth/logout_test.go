@@ -2,6 +2,8 @@ package auth
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
 	"errors"
 	"fmt"
 	"net/http"
@@ -18,33 +20,33 @@ import (
 )
 
 type memoryRefreshTokenStore struct {
-	tokens      map[string]string
+	tokens      map[string]int64
 	deleteErr   error
 	deleteCalls int
 	nextToken   int
 }
 
 func newMemoryRefreshTokenStore() *memoryRefreshTokenStore {
-	return &memoryRefreshTokenStore{tokens: make(map[string]string)}
+	return &memoryRefreshTokenStore{tokens: make(map[string]int64)}
 }
 
-func (s *memoryRefreshTokenStore) Create(_ context.Context, username string, _ time.Duration) (string, error) {
+func (s *memoryRefreshTokenStore) Create(_ context.Context, userID int64, _ time.Duration) (string, error) {
 	s.nextToken++
 	token := fmt.Sprintf("token-%d", s.nextToken)
-	s.tokens[token] = username
+	s.tokens[token] = userID
 	return token, nil
 }
 
-func (s *memoryRefreshTokenStore) Rotate(_ context.Context, refreshToken string, _ time.Duration) (string, string, error) {
-	username, ok := s.tokens[refreshToken]
+func (s *memoryRefreshTokenStore) Rotate(_ context.Context, refreshToken string, _ time.Duration) (string, int64, error) {
+	userID, ok := s.tokens[refreshToken]
 	if !ok {
-		return "", "", rdb.ErrRefreshTokenNotFound
+		return "", 0, rdb.ErrRefreshTokenNotFound
 	}
 	delete(s.tokens, refreshToken)
 	s.nextToken++
 	newToken := fmt.Sprintf("token-%d", s.nextToken)
-	s.tokens[newToken] = username
-	return newToken, username, nil
+	s.tokens[newToken] = userID
+	return newToken, userID, nil
 }
 
 func (s *memoryRefreshTokenStore) Delete(_ context.Context, refreshToken string) error {
@@ -56,14 +58,32 @@ func (s *memoryRefreshTokenStore) Delete(_ context.Context, refreshToken string)
 	return nil
 }
 
-func newLogoutTestRouter(store RefreshTokenStore) *gin.Engine {
+func newLogoutTestRouter(t *testing.T, store RefreshTokenStore) *gin.Engine {
+	jwtmanager := newAuthTestJWTManager(t)
 	service := &AuthService{
-		jwtmanager:    jwtservice.NewJWTManager("test-secret", "test-issuer", time.Minute, time.Hour),
+		jwtmanager:    jwtmanager,
 		refreshTokens: store,
 	}
 	router := gin.New()
 	RegisterAuthRoutes(router.Group("/api/v1"), NewAuthHandler(service, false))
 	return router
+}
+
+func newAuthTestJWTManager(t *testing.T) *jwtservice.JWTManager {
+	t.Helper()
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate test RSA key: %v", err)
+	}
+	return jwtservice.NewJWTManager(
+		privateKey,
+		&privateKey.PublicKey,
+		"test-key",
+		"test-issuer",
+		"test-api",
+		time.Minute,
+		time.Hour,
+	)
 }
 
 func performLogout(router http.Handler, refreshToken string) *httptest.ResponseRecorder {
@@ -104,9 +124,9 @@ func TestRefreshCookieIsAvailableToLogout(t *testing.T) {
 
 func TestLogoutRevokesRefreshToken(t *testing.T) {
 	store := newMemoryRefreshTokenStore()
-	store.tokens["old-token"] = "admin"
+	store.tokens["old-token"] = 1
 	service := &AuthService{
-		jwtmanager:    jwtservice.NewJWTManager("test-secret", "test-issuer", time.Minute, time.Hour),
+		jwtmanager:    newAuthTestJWTManager(t),
 		refreshTokens: store,
 	}
 
@@ -124,8 +144,8 @@ func TestLogoutHandler(t *testing.T) {
 
 	t.Run("revokes token and clears current and legacy cookies", func(t *testing.T) {
 		store := newMemoryRefreshTokenStore()
-		store.tokens["old-token"] = "admin"
-		recorder := performLogout(newLogoutTestRouter(store), "old-token")
+		store.tokens["old-token"] = 1
+		recorder := performLogout(newLogoutTestRouter(t, store), "old-token")
 
 		if recorder.Code != http.StatusOK {
 			t.Fatalf("status = %d, want %d: %s", recorder.Code, http.StatusOK, recorder.Body.String())
@@ -144,7 +164,7 @@ func TestLogoutHandler(t *testing.T) {
 
 	t.Run("is idempotent without cookie", func(t *testing.T) {
 		store := newMemoryRefreshTokenStore()
-		recorder := performLogout(newLogoutTestRouter(store), "")
+		recorder := performLogout(newLogoutTestRouter(t, store), "")
 
 		if recorder.Code != http.StatusOK {
 			t.Fatalf("status = %d, want %d: %s", recorder.Code, http.StatusOK, recorder.Body.String())
@@ -157,7 +177,7 @@ func TestLogoutHandler(t *testing.T) {
 	t.Run("clears cookie when token store fails", func(t *testing.T) {
 		store := newMemoryRefreshTokenStore()
 		store.deleteErr = errors.New("redis unavailable")
-		recorder := performLogout(newLogoutTestRouter(store), "old-token")
+		recorder := performLogout(newLogoutTestRouter(t, store), "old-token")
 
 		if recorder.Code != http.StatusInternalServerError {
 			t.Fatalf("status = %d, want %d", recorder.Code, http.StatusInternalServerError)

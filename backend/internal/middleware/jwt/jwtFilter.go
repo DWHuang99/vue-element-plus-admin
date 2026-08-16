@@ -2,10 +2,16 @@ package jwtservice
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 	"vue-element-plus-admin/backend/internal/dto/response"
 
 	"github.com/gin-gonic/gin"
+)
+
+const (
+	UserIDContextKey      = "userID"
+	PermissionsContextKey = "permissions"
 )
 
 func JwtFilter(jwtManager *JWTManager) gin.HandlerFunc {
@@ -31,8 +37,16 @@ func JwtFilter(jwtManager *JWTManager) gin.HandlerFunc {
 		}
 
 		// 将解析出的用户信息放进本次请求的 Context
-		c.Set("username", claims.Subject)
+		userID, err := strconv.ParseInt(claims.Subject, 10, 64)
+		if err != nil || userID <= 0 {
+			response.Error(c, http.StatusUnauthorized, 401, "invalid user identity")
+			c.Abort()
+			return
+		}
+
+		c.Set(UserIDContextKey, userID)
 		c.Set("role", claims.Role)
+		c.Set(PermissionsContextKey, claims.Permissions)
 
 		// 继续执行后面的中间件和 Handler
 		c.Next()

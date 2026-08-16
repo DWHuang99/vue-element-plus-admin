@@ -1,6 +1,6 @@
 <script setup lang="tsx">
 import { reactive, ref, unref } from 'vue'
-import { getMenuListApi } from '@/api/menu'
+import { deleteMenuApi, getMenuListApi, saveMenuApi } from '@/api/menu'
 import { useTable } from '@/hooks/web/useTable'
 import { useI18n } from '@/hooks/web/useI18n'
 import { Table, TableColumn } from '@/components/Table'
@@ -116,7 +116,9 @@ const tableColumns = reactive<TableColumn[]>([
             <BaseButton type="success" onClick={() => action(row, 'detail')}>
               {t('exampleDemo.detail')}
             </BaseButton>
-            <BaseButton type="danger">{t('exampleDemo.del')}</BaseButton>
+            <BaseButton type="danger" onClick={() => delData(row)}>
+              {t('exampleDemo.del')}
+            </BaseButton>
           </>
         )
       }
@@ -165,13 +167,21 @@ const AddAction = () => {
 const save = async () => {
   const write = unref(writeRef)
   const formData = await write?.submit()
-  console.log(formData)
   if (formData) {
     saveLoading.value = true
-    setTimeout(() => {
-      saveLoading.value = false
+    const res = await saveMenuApi(formData).catch(() => undefined)
+    if (res) {
       dialogVisible.value = false
-    }, 1000)
+      getList()
+    }
+    saveLoading.value = false
+  }
+}
+
+const delData = async (row: any) => {
+  const res = await deleteMenuApi(row.id).catch(() => undefined)
+  if (res) {
+    getList()
   }
 }
 </script>

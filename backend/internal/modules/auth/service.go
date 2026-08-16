@@ -2,10 +2,11 @@ package auth
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"strings"
 	"time"
-	db "vue-element-plus-admin/backend/internal/database/generated"
+	db "vue-element-plus-admin/backend/internal/database/iam/generated"
 	"vue-element-plus-admin/backend/internal/dto/request"
 	jwtservice "vue-element-plus-admin/backend/internal/middleware/jwt"
 	rdb "vue-element-plus-admin/backend/internal/middleware/redis"
@@ -13,7 +14,6 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -22,7 +22,10 @@ var (
 	ErrInvalidRefreshToken = errors.New("invalid or expired refresh token")
 	ErrUserExists          = errors.New("username already exists")
 	ErrUserDisabled        = errors.New("user is disabled")
+	ErrDefaultRoleMissing  = errors.New("default registration role is unavailable")
 )
+
+const defaultRegistrationRoleCode = "test"
 
 type AuthService struct {
 	repository    *AuthRepository
@@ -31,8 +34,8 @@ type AuthService struct {
 }
 
 type RefreshTokenStore interface {
-	Create(ctx context.Context, username string, ttl time.Duration) (string, error)
-	Rotate(ctx context.Context, refreshToken string, ttl time.Duration) (string, string, error)
+	Create(ctx context.Context, userID int64, ttl time.Duration) (string, error)
+	Rotate(ctx context.Context, refreshToken string, ttl time.Duration) (string, int64, error)
 	Delete(ctx context.Context, refreshToken string) error
 }
 
@@ -40,11 +43,11 @@ type redisRefreshTokenStore struct {
 	client *redis.Client
 }
 
-func (s *redisRefreshTokenStore) Create(ctx context.Context, username string, ttl time.Duration) (string, error) {
-	return rdb.CreateRefreshToken(s.client, ctx, username, ttl)
+func (s *redisRefreshTokenStore) Create(ctx context.Context, userID int64, ttl time.Duration) (string, error) {
+	return rdb.CreateRefreshToken(s.client, ctx, userID, ttl)
 }
 
-func (s *redisRefreshTokenStore) Rotate(ctx context.Context, refreshToken string, ttl time.Duration) (string, string, error) {
+func (s *redisRefreshTokenStore) Rotate(ctx context.Context, refreshToken string, ttl time.Duration) (string, int64, error) {
 	return rdb.RotateRefreshToken(s.client, ctx, refreshToken, ttl)
 }
 
@@ -63,7 +66,7 @@ func NewService(repository *AuthRepository, jwtmanager *jwtservice.JWTManager, r
 func (s *AuthService) Login(ctx context.Context, loginreq request.LoginRequest) (string, string, bool, error) {
 	userAuth, err := s.repository.GetUserAuthByUsername(ctx, loginreq.Username)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return "", "", false, nil
 		}
 		return "", "", false, err
@@ -73,11 +76,13 @@ func (s *AuthService) Login(ctx context.Context, loginreq request.LoginRequest) 
 		if !userAuth.IsActive {
 			return "", "", true, ErrUserDisabled
 		}
-		accessToken, err := s.jwtmanager.GenerateToken(loginreq.Username, []string{userAuth.RoleCode})
+		accessToken, err := s.jwtmanager.GenerateTokenWithPermissions(
+			userAuth.ID, []string{userAuth.RoleCode}, userAuth.Permissions,
+		)
 		if err != nil {
 			return "", "", true, err
 		}
-		refreshToken, err := s.refreshTokens.Create(ctx, loginreq.Username, s.jwtmanager.RefreshTTL)
+		refreshToken, err := s.refreshTokens.Create(ctx, userAuth.ID, s.jwtmanager.RefreshTTL)
 		if err != nil {
 			return "", "", true, err
 		}
@@ -89,7 +94,7 @@ func (s *AuthService) Login(ctx context.Context, loginreq request.LoginRequest) 
 }
 
 func (s *AuthService) Refresh(ctx context.Context, refreshToken string) (string, string, error) {
-	newRefreshToken, username, err := s.refreshTokens.Rotate(ctx, refreshToken, s.jwtmanager.RefreshTTL)
+	newRefreshToken, userID, err := s.refreshTokens.Rotate(ctx, refreshToken, s.jwtmanager.RefreshTTL)
 	if errors.Is(err, rdb.ErrRefreshTokenNotFound) {
 		return "", "", ErrInvalidRefreshToken
 	}
@@ -97,9 +102,9 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken string) (string,
 		return "", "", err
 	}
 
-	userAuth, err := s.repository.GetUserAuthByUsername(ctx, username)
+	userAuth, err := s.repository.GetUserAuthByID(ctx, userID)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return "", "", ErrInvalidRefreshToken
 		}
 		return "", "", err
@@ -108,7 +113,9 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken string) (string,
 		return "", "", ErrUserDisabled
 	}
 
-	newAccessToken, err := s.jwtmanager.GenerateToken(username, []string{userAuth.RoleCode})
+	newAccessToken, err := s.jwtmanager.GenerateTokenWithPermissions(
+		userAuth.ID, []string{userAuth.RoleCode}, userAuth.Permissions,
+	)
 	if err != nil {
 		return "", "", err
 	}
@@ -134,14 +141,16 @@ func (s *AuthService) Register(ctx context.Context, registerRequest request.Regi
 		return nil, err
 	}
 
-	newUser := db.AddUserParams{
-		Username:     registerRequest.Username,
-		PasswordHash: passwordHash,
-		RoleID:       2,
-	}
-
-	user, err := s.repository.AddUser(ctx, newUser)
+	user, err := s.repository.AddUser(
+		ctx,
+		registerRequest.Username,
+		passwordHash,
+		defaultRegistrationRoleCode,
+	)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrDefaultRoleMissing
+		}
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			return nil, ErrUserExists

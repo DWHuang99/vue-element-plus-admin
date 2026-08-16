@@ -4,8 +4,10 @@ import { useI18n } from '@/hooks/web/useI18n'
 import { Table } from '@/components/Table'
 import { ref, unref, nextTick, watch, reactive } from 'vue'
 import { ElTree, ElInput, ElDivider } from 'element-plus'
-import { getDepartmentApi, getUserByIdApi, saveUserApi, deleteUserByIdApi } from '@/api/department'
-import type { DepartmentItem, DepartmentUserItem } from '@/api/department/types'
+import { getDepartmentApi } from '@/api/department'
+import { getUserListApi, saveUserApi, deleteUserApi } from '@/api/user'
+import type { DepartmentItem } from '@/api/department/types'
+import type { UserItem } from '@/api/user/types'
 import { useTable } from '@/hooks/web/useTable'
 import { Search } from '@/components/Search'
 import Write from './components/Write.vue'
@@ -20,8 +22,8 @@ const { t } = useI18n()
 const { tableRegister, tableState, tableMethods } = useTable({
   fetchDataApi: async () => {
     const { pageSize, currentPage } = tableState
-    const res = await getUserByIdApi({
-      id: unref(currentNodeKey),
+    const res = await getUserListApi({
+      departmentId: unref(currentNodeKey),
       pageIndex: unref(currentPage),
       pageSize: unref(pageSize),
       ...unref(searchParams)
@@ -32,7 +34,7 @@ const { tableRegister, tableState, tableMethods } = useTable({
     }
   },
   fetchDelApi: async () => {
-    const res = await deleteUserByIdApi(unref(ids))
+    const res = await deleteUserApi(unref(ids))
     return !!res
   }
 })
@@ -85,7 +87,7 @@ const crudSchemas = reactive<CrudSchema[]>([
     detail: {
       hidden: true
       // slots: {
-      //   default: (data: DepartmentUserItem) => {
+      //   default: (data: UserItem) => {
       //     return <>{data.department.departmentName}</>
       //   }
       // }
@@ -111,18 +113,15 @@ const crudSchemas = reactive<CrudSchema[]>([
     }
   },
   {
-    field: 'role',
+    field: 'roleId',
     label: t('userDemo.role'),
     search: {
       hidden: true
     },
     form: {
       component: 'Select',
-      value: [],
       componentProps: {
-        multiple: true,
-        collapseTags: true,
-        maxCollapseTags: 1
+        clearable: true
       },
       optionApi: async () => {
         const res = await getRoleListApi()
@@ -131,6 +130,27 @@ const crudSchemas = reactive<CrudSchema[]>([
           value: v.id
         }))
       }
+    }
+  },
+  {
+    field: 'password',
+    label: t('userDemo.password'),
+    form: {
+      component: 'Input',
+      componentProps: {
+        type: 'password',
+        showPassword: true,
+        placeholder: '新增用户时必填，编辑时留空表示不修改'
+      }
+    },
+    table: {
+      hidden: true
+    },
+    search: {
+      hidden: true
+    },
+    detail: {
+      hidden: true
     }
   },
   {
@@ -169,7 +189,7 @@ const crudSchemas = reactive<CrudSchema[]>([
       width: 240,
       slots: {
         default: (data: any) => {
-          const row = data.row as DepartmentUserItem
+          const row = data.row as UserItem
           return (
             <>
               <BaseButton type="primary" onClick={() => action(row, 'edit')}>
@@ -200,7 +220,7 @@ const setSearchParams = (params: any) => {
 
 const treeEl = ref<typeof ElTree>()
 
-const currentNodeKey = ref('')
+const currentNodeKey = ref<string | number>('')
 const departmentList = ref<DepartmentItem[]>([])
 const fetchDepartment = async () => {
   const res = await getDepartmentApi()
@@ -235,7 +255,7 @@ const filterNode = (value: string, data: DepartmentItem) => {
 const dialogVisible = ref(false)
 const dialogTitle = ref('')
 
-const currentRow = ref<DepartmentUserItem>()
+const currentRow = ref<UserItem>()
 const actionType = ref('')
 
 const AddAction = () => {
@@ -248,11 +268,9 @@ const AddAction = () => {
 const delLoading = ref(false)
 const ids = ref<string[]>([])
 
-const delData = async (row?: DepartmentUserItem) => {
+const delData = async (row?: UserItem) => {
   const elTableExpose = await getElTableExpose()
-  ids.value = row
-    ? [row.id]
-    : elTableExpose?.getSelectionRows().map((v: DepartmentUserItem) => v.id) || []
+  ids.value = row ? [row.id] : elTableExpose?.getSelectionRows().map((v: UserItem) => v.id) || []
   delLoading.value = true
 
   await delList(unref(ids).length).finally(() => {
@@ -260,7 +278,7 @@ const delData = async (row?: DepartmentUserItem) => {
   })
 }
 
-const action = (row: DepartmentUserItem, type: string) => {
+const action = (row: UserItem, type: string) => {
   dialogTitle.value = t(type === 'edit' ? 'exampleDemo.edit' : 'exampleDemo.detail')
   actionType.value = type
   currentRow.value = { ...row, department: unref(treeEl)?.getCurrentNode() || {} }

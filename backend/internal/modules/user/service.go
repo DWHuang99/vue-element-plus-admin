@@ -2,10 +2,9 @@ package user
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"time"
-
-	"github.com/jackc/pgx/v5"
 )
 
 var (
@@ -28,7 +27,7 @@ type CurrentUser struct {
 }
 
 type UserRepositoryReader interface {
-	GetUserByUsername(ctx context.Context, username string) (*CurrentUser, error)
+	GetUserByID(ctx context.Context, userID int64) (*CurrentUser, error)
 }
 
 type UserService struct {
@@ -42,10 +41,10 @@ func NewService(repository UserRepositoryReader) *UserService {
 	}
 }
 
-func (s *UserService) GetUserByUsername(ctx context.Context, username string) (*CurrentUser, error) {
-	user, err := s.repository.GetUserByUsername(ctx, username)
+func (s *UserService) GetUserByID(ctx context.Context, userID int64) (*CurrentUser, error) {
+	user, err := s.repository.GetUserByID(ctx, userID)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrUserNotExists
 		}
 		return nil, err

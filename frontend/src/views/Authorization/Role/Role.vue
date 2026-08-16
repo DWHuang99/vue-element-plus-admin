@@ -1,6 +1,6 @@
 <script setup lang="tsx">
 import { reactive, ref, unref } from 'vue'
-import { getRoleListApi } from '@/api/role'
+import { deleteRoleApi, getRoleListApi, saveRoleApi } from '@/api/role'
 import { useTable } from '@/hooks/web/useTable'
 import { useI18n } from '@/hooks/web/useI18n'
 import { Table, TableColumn } from '@/components/Table'
@@ -17,7 +17,12 @@ const { t } = useI18n()
 
 const { tableRegister, tableState, tableMethods } = useTable({
   fetchDataApi: async () => {
-    const res = await getRoleListApi()
+    const { currentPage, pageSize } = tableState
+    const res = await getRoleListApi({
+      pageIndex: unref(currentPage),
+      pageSize: unref(pageSize),
+      ...unref(searchParams)
+    })
     return {
       list: res.data.list || [],
       total: res.data.total
@@ -76,7 +81,9 @@ const tableColumns = reactive<TableColumn[]>([
             <BaseButton type="success" onClick={() => action(row, 'detail')}>
               {t('exampleDemo.detail')}
             </BaseButton>
-            <BaseButton type="danger">{t('exampleDemo.del')}</BaseButton>
+            <BaseButton type="danger" onClick={() => delData(row)}>
+              {t('exampleDemo.del')}
+            </BaseButton>
           </>
         )
       }
@@ -127,10 +134,19 @@ const save = async () => {
   const formData = await write?.submit()
   if (formData) {
     saveLoading.value = true
-    setTimeout(() => {
-      saveLoading.value = false
+    const res = await saveRoleApi(formData).catch(() => undefined)
+    if (res) {
       dialogVisible.value = false
-    }, 1000)
+      getList()
+    }
+    saveLoading.value = false
+  }
+}
+
+const delData = async (row: any) => {
+  const res = await deleteRoleApi(row.id).catch(() => undefined)
+  if (res) {
+    getList()
   }
 }
 </script>

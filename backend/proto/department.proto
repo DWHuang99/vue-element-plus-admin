@@ -1,0 +1,29 @@
+syntax = "proto3";
+package department;
+
+option go_package = "vue-element-plus-admin/backend/pb;pb";
+
+service DepartmentService {
+  rpc GetDepartment(GetDepartmentRequest) returns (GetDepartmentResponse);
+  rpc BatchGetDepartments(BatchGetDepartmentsRequest) returns (BatchGetDepartmentsResponse);
+}
+
+message GetDepartmentRequest {
+  int64 id = 1;
+}
+
+message GetDepartmentResponse {
+  int64 id = 1;
+  string department_name = 2;
+  bool status = 3;
+  string remark = 4;
+  bool deleting = 5;
+}
+
+message BatchGetDepartmentsRequest {
+  repeated int64 ids = 1;
+}
+
+message BatchGetDepartmentsResponse {
+  repeated GetDepartmentResponse departments = 1;
+}
