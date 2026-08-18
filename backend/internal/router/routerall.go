@@ -5,7 +5,6 @@ import (
 	"database/sql"
 
 	db "vue-element-plus-admin/backend/internal/database/iam/generated"
-	"vue-element-plus-admin/backend/internal/middleware/authorization"
 	jwtservice "vue-element-plus-admin/backend/internal/middleware/jwt"
 	"vue-element-plus-admin/backend/internal/modules/auth"
 	"vue-element-plus-admin/backend/internal/modules/menu"
@@ -13,11 +12,19 @@ import (
 	"vue-element-plus-admin/backend/internal/modules/user"
 	"vue-element-plus-admin/backend/internal/modules/usermanagement"
 
+	"github.com/casbin/casbin/v3"
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 )
 
-func AuthRouter(api *gin.RouterGroup, queries *db.Queries, jwtmanager *jwtservice.JWTManager, rdbClient *redis.Client, cookieSecure bool) {
+func AuthRouter(
+	api *gin.RouterGroup,
+	queries *db.Queries,
+	jwtmanager *jwtservice.JWTManager,
+	rdbClient *redis.Client,
+	cookieSecure bool,
+	casbinEnforcer *casbin.SyncedEnforcer,
+) {
 	auth.RegisterAuthRoutes(
 		api,
 		auth.NewAuthHandler(
@@ -25,6 +32,7 @@ func AuthRouter(api *gin.RouterGroup, queries *db.Queries, jwtmanager *jwtservic
 				auth.NewRepository(queries),
 				jwtmanager,
 				rdbClient,
+				casbinEnforcer,
 			),
 			cookieSecure,
 		),
@@ -33,42 +41,59 @@ func AuthRouter(api *gin.RouterGroup, queries *db.Queries, jwtmanager *jwtservic
 
 func UserRouter(
 	api *gin.RouterGroup,
+	database *sql.DB,
 	queries *db.Queries,
 	jwtmanager *jwtservice.JWTManager,
 	managementService *usermanagement.Service,
+	casbinEnforcer *casbin.SyncedEnforcer,
 ) {
 	repository := user.NewRepository(queries)
+	menuService := menu.NewService(menu.NewRepository(database, queries))
 	user.RegisterUserRoutes(
 		api,
 		user.NewUserHandler(
 			user.NewService(
 				repository,
+				casbinEnforcer,
 			),
+			menuService,
 		),
 		jwtmanager,
 	)
 	usermanagement.RegisterRoutes(
 		api,
 		usermanagement.NewHandler(managementService),
-		authorization.NewDatabaseChecker(queries),
+		casbinEnforcer,
 		jwtmanager,
 	)
 }
 
-func MenuRouter(api *gin.RouterGroup, queries *db.Queries, jwtmanager *jwtservice.JWTManager) {
+func MenuRouter(
+	api *gin.RouterGroup,
+	database *sql.DB,
+	queries *db.Queries,
+	jwtmanager *jwtservice.JWTManager,
+	casbinEnforcer *casbin.SyncedEnforcer,
+) {
 	menu.RegisterRoutes(
 		api,
-		menu.NewHandler(menu.NewService(menu.NewRepository(queries))),
-		authorization.NewDatabaseChecker(queries),
+		menu.NewHandler(menu.NewService(menu.NewRepository(database, queries))),
+		casbinEnforcer,
 		jwtmanager,
 	)
 }
 
-func RoleRouter(api *gin.RouterGroup, queries *db.Queries, database *sql.DB, jwtmanager *jwtservice.JWTManager) {
+func RoleRouter(
+	api *gin.RouterGroup,
+	queries *db.Queries,
+	database *sql.DB,
+	jwtmanager *jwtservice.JWTManager,
+	casbinEnforcer *casbin.SyncedEnforcer,
+) {
 	role.RegisterRoutes(
 		api,
-		role.NewHandler(role.NewService(role.NewRepository(database, queries))),
-		authorization.NewDatabaseChecker(queries),
+		role.NewHandler(role.NewService(role.NewRepository(database, queries), casbinEnforcer)),
+		casbinEnforcer,
 		jwtmanager,
 	)
 }

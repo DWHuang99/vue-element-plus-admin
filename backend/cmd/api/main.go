@@ -7,9 +7,10 @@ import (
 	"vue-element-plus-admin/backend/internal/config"
 	dbconnect "vue-element-plus-admin/backend/internal/database/connect"
 	iamdb "vue-element-plus-admin/backend/internal/database/iam/generated"
+	departmentdirectory "vue-element-plus-admin/backend/internal/directory/department"
 	"vue-element-plus-admin/backend/internal/dto/response"
-	departmentgrpc "vue-element-plus-admin/backend/internal/grpc/department"
 	usermanagementgrpc "vue-element-plus-admin/backend/internal/grpc/usermanagement"
+	casbinrbac "vue-element-plus-admin/backend/internal/middleware/casbin"
 	jwtservice "vue-element-plus-admin/backend/internal/middleware/jwt"
 	rdb "vue-element-plus-admin/backend/internal/middleware/redis"
 	"vue-element-plus-admin/backend/internal/modules/usermanagement"
@@ -40,6 +41,10 @@ func main() {
 		log.Fatalf("connect IAM database: %v", err)
 	}
 	queries := iamdb.New(database)
+	casbinEnforcer, err := casbinrbac.NewEnforcer(database)
+	if err != nil {
+		log.Fatalf("initialize Casbin authorization: %v", err)
+	}
 	rdbClient := rdb.ConnectRedis(ctx, redisConfig)
 	jwtmanager := jwtservice.CreateJWTManager(jwtConfig)
 	departmentConnection, err := grpc.NewClient(
@@ -50,13 +55,14 @@ func main() {
 		log.Fatalf("create Department gRPC client: %v", err)
 	}
 	defer departmentConnection.Close()
-	departmentDirectory := departmentgrpc.NewDirectory(
+	departmentDirectory := departmentdirectory.New(
 		pb.NewDepartmentServiceClient(departmentConnection),
 		serviceConfig.GRPCTimeout,
 	)
 	managementService := usermanagement.NewService(
-		usermanagement.NewRepository(queries),
+		usermanagement.NewRepository(database, queries),
 		departmentDirectory,
+		casbinEnforcer,
 	)
 	go func() {
 		if err := usermanagementgrpc.Serve(serviceConfig.IAMGRPCAddr, managementService); err != nil {
@@ -77,16 +83,16 @@ func main() {
 	})
 
 	apirouter.AuthRouter(
-		api, queries, jwtmanager, rdbClient, cookieConfig.Secure,
+		api, queries, jwtmanager, rdbClient, cookieConfig.Secure, casbinEnforcer,
 	)
 	apirouter.PublicKeyRouter(
 		router, jwtConfig.PublicKey, jwtConfig.KeyID,
 	)
 	apirouter.UserRouter(
-		api, queries, jwtmanager, managementService,
+		api, database, queries, jwtmanager, managementService, casbinEnforcer,
 	)
-	apirouter.MenuRouter(api, queries, jwtmanager)
-	apirouter.RoleRouter(api, queries, database, jwtmanager)
+	apirouter.MenuRouter(api, database, queries, jwtmanager, casbinEnforcer)
+	apirouter.RoleRouter(api, queries, database, jwtmanager, casbinEnforcer)
 
 	router.Run()
 }

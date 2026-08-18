@@ -2,7 +2,6 @@ package auth
 
 import (
 	"context"
-	"encoding/json"
 
 	db "vue-element-plus-admin/backend/internal/database/iam/generated"
 )
@@ -15,8 +14,6 @@ type UserAuth struct {
 	ID           int64
 	PasswordHash string
 	IsActive     bool
-	RoleCode     string
-	Permissions  []string
 }
 
 func NewRepository(queries *db.Queries) *AuthRepository {
@@ -48,16 +45,10 @@ func (r *AuthRepository) GetUserAuthByUsername(ctx context.Context, username str
 	if err != nil {
 		return nil, err
 	}
-	var permissions []string
-	if err := json.Unmarshal([]byte(row.PermissionsJson), &permissions); err != nil {
-		return nil, err
-	}
 	return &UserAuth{
 		ID:           row.ID,
 		PasswordHash: row.PasswordHash,
 		IsActive:     row.IsActive,
-		RoleCode:     row.RoleCode,
-		Permissions:  permissions,
 	}, nil
 }
 
@@ -66,15 +57,9 @@ func (r *AuthRepository) GetUserAuthByID(ctx context.Context, userID int64) (*Us
 	if err != nil {
 		return nil, err
 	}
-	var permissions []string
-	if err := json.Unmarshal([]byte(row.PermissionsJson), &permissions); err != nil {
-		return nil, err
-	}
 	return &UserAuth{
 		ID:           row.ID,
 		PasswordHash: row.PasswordHash,
 		IsActive:     row.IsActive,
-		RoleCode:     row.RoleCode,
-		Permissions:  permissions,
 	}, nil
 }

@@ -8,7 +8,10 @@ import (
 	"strings"
 	"time"
 
+	casbinrbac "vue-element-plus-admin/backend/internal/middleware/casbin"
 	"vue-element-plus-admin/backend/internal/modules/permission"
+
+	"github.com/casbin/casbin/v3"
 )
 
 var (
@@ -33,10 +36,11 @@ type Input struct {
 
 type Service struct {
 	repository Repository
+	enforcer   *casbin.SyncedEnforcer
 }
 
-func NewService(repository Repository) *Service {
-	return &Service{repository: repository}
+func NewService(repository Repository, enforcer *casbin.SyncedEnforcer) *Service {
+	return &Service{repository: repository, enforcer: enforcer}
 }
 
 func (s *Service) List(ctx context.Context, page, size int, name string) ([]RoleItem, int, error) {
@@ -82,7 +86,7 @@ func (s *Service) Create(ctx context.Context, input Input) error {
 	}
 	assignments := collectAssignments(input.Menu)
 	globalPermissions := globalPermissionsForRole(input.Code)
-	return s.repository.WithinTx(ctx, func(repository Repository) error {
+	err := s.repository.WithinTx(ctx, func(repository Repository) error {
 		roleID, err := repository.Create(ctx, input)
 		if err != nil {
 			return fmt.Errorf("%w: %v", ErrRoleCodeConflict, err)
@@ -92,6 +96,23 @@ func (s *Service) Create(ctx context.Context, input Input) error {
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	permissions := permissionsForAssignments(assignments, globalPermissions)
+	if input.Status == 0 {
+		permissions = nil
+	}
+	roleSubject := casbinrbac.RoleSubject(input.Code)
+	if _, err := s.enforcer.DeletePermissionsForUser(roleSubject); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidAccess, err)
+	}
+	for _, permissionCode := range permissions {
+		if _, err := s.enforcer.AddPermissionForUser(roleSubject, permissionCode); err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalidAccess, err)
+		}
+	}
+	return nil
 }
 
 func (s *Service) Update(ctx context.Context, id int64, input Input) error {
@@ -99,11 +120,13 @@ func (s *Service) Update(ctx context.Context, id int64, input Input) error {
 		return ErrInvalidInput
 	}
 	assignments := collectAssignments(input.Menu)
-	return s.repository.WithinTx(ctx, func(repository Repository) error {
+	var roleCode string
+	err := s.repository.WithinTx(ctx, func(repository Repository) error {
 		current, err := repository.Get(ctx, id)
 		if isNotFound(err) {
 			return ErrNotFound
 		}
+		roleCode = current.Code
 		if err != nil {
 			return err
 		}
@@ -118,6 +141,23 @@ func (s *Service) Update(ctx context.Context, id int64, input Input) error {
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	permissions := permissionsForAssignments(assignments, globalPermissionsForRole(roleCode))
+	if input.Status == 0 {
+		permissions = nil
+	}
+	roleSubject := casbinrbac.RoleSubject(roleCode)
+	if _, err := s.enforcer.DeletePermissionsForUser(roleSubject); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidAccess, err)
+	}
+	for _, permissionCode := range permissions {
+		if _, err := s.enforcer.AddPermissionForUser(roleSubject, permissionCode); err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalidAccess, err)
+		}
+	}
+	return nil
 }
 
 func (s *Service) Delete(ctx context.Context, id int64) error {
@@ -131,11 +171,51 @@ func (s *Service) Delete(ctx context.Context, id int64) error {
 	if count > 0 {
 		return ErrAssignedUsers
 	}
-	if err := s.repository.Delete(ctx, id); isNotFound(err) {
+	current, err := s.repository.Get(ctx, id)
+	if isNotFound(err) {
 		return ErrNotFound
-	} else {
+	}
+	if err != nil {
 		return err
 	}
+	roleSubject := casbinrbac.RoleSubject(current.Code)
+	users, err := s.enforcer.GetUsersForRole(roleSubject)
+	if err != nil {
+		return err
+	}
+	if len(users) > 0 {
+		return ErrAssignedUsers
+	}
+	if err := s.repository.Delete(ctx, id); isNotFound(err) {
+		return ErrNotFound
+	} else if err != nil {
+		return err
+	}
+	_, err = s.enforcer.DeleteRole(roleSubject)
+	return err
+}
+
+func permissionsForAssignments(assignments []MenuAssignment, globalPermissions []string) []string {
+	seen := make(map[string]struct{})
+	permissions := make([]string, 0)
+	for _, assignment := range assignments {
+		for _, permissionCode := range assignment.PermissionCodes {
+			if _, exists := seen[permissionCode]; exists {
+				continue
+			}
+			seen[permissionCode] = struct{}{}
+			permissions = append(permissions, permissionCode)
+		}
+	}
+	for _, permissionCode := range globalPermissions {
+		if _, exists := seen[permissionCode]; exists {
+			continue
+		}
+		seen[permissionCode] = struct{}{}
+		permissions = append(permissions, permissionCode)
+	}
+	sort.Strings(permissions)
+	return permissions
 }
 
 func collectAssignments(menus []MenuItem) []MenuAssignment {

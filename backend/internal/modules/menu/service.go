@@ -46,6 +46,43 @@ func (s *Service) Tree(ctx context.Context) ([]MenuItem, error) {
 	return buildMenuTree(items), nil
 }
 
+// AuthorizedTree returns the enabled routes assigned to a role. Administrators
+// receive all enabled routes because their wildcard permission is global.
+func (s *Service) AuthorizedTree(ctx context.Context, roleCodes []string, administrator bool) ([]MenuItem, error) {
+	var (
+		items []MenuItem
+		err   error
+	)
+	if administrator {
+		items, err = s.repository.All(ctx)
+	} else {
+		items, err = s.repository.AssignedToRoles(ctx, roleCodes)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return filterEnabledMenuTree(buildMenuTree(items), administrator), nil
+}
+
+func filterEnabledMenuTree(items []MenuItem, grantAllPermissions bool) []MenuItem {
+	enabled := make([]MenuItem, 0, len(items))
+	for _, item := range items {
+		if item.Status == 0 {
+			continue
+		}
+		item.Children = filterEnabledMenuTree(item.Children, grantAllPermissions)
+		if grantAllPermissions {
+			item.Meta.Permission = make([]string, 0, len(item.PermissionList))
+			for _, permissionItem := range item.PermissionList {
+				item.Meta.Permission = append(item.Meta.Permission, permissionItem.Value)
+			}
+		}
+		enabled = append(enabled, item)
+	}
+	return enabled
+}
+
 func (s *Service) Create(ctx context.Context, input Input) error {
 	if !validInput(input) {
 		return ErrInvalidInput

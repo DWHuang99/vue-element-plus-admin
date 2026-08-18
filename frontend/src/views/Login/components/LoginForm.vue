@@ -4,8 +4,7 @@ import { Form, FormSchema } from '@/components/Form'
 import { useI18n } from '@/hooks/web/useI18n'
 import { ElCheckbox, ElLink, ElAlert } from 'element-plus'
 import { useForm } from '@/hooks/web/useForm'
-import { loginApi, getCurrentUserApi, getTestRoleApi, getAdminRoleApi } from '@/api/login'
-import { useAppStore } from '@/store/modules/app'
+import { loginApi, getCurrentUserApi, getCurrentUserMenusApi } from '@/api/login'
 import { usePermissionStore } from '@/store/modules/permission'
 import { useRouter } from 'vue-router'
 import type { RouteLocationNormalizedLoaded, RouteRecordRaw } from 'vue-router'
@@ -18,8 +17,6 @@ import { BaseButton } from '@/components/Button'
 const { required } = useValidator()
 
 const emit = defineEmits(['to-register'])
-
-const appStore = useAppStore()
 
 const userStore = useUserStore()
 
@@ -291,17 +288,7 @@ const signIn = async () => {
           userStore.setToken(res.data.accessToken)
           const currentUser = await getCurrentUserApi()
           userStore.setUserInfo(currentUser.data)
-          // 是否使用动态路由
-          if (appStore.getDynamicRouter) {
-            await getRole()
-          } else {
-            await permissionStore.generateRoutes('static').catch(() => {})
-            permissionStore.getAddRouters.forEach((route) => {
-              addRoute(route as RouteRecordRaw) // 动态添加可访问路由表
-            })
-            permissionStore.setIsAddRouters(true)
-            push({ path: getRedirectPath() })
-          }
+          await getRole()
         }
       } catch (error: any) {
         userStore.setToken('')
@@ -316,19 +303,11 @@ const signIn = async () => {
 
 // 获取角色信息
 const getRole = async () => {
-  const params = {
-    roleName: userStore.getUserInfo!.username
-  }
-  const res =
-    appStore.getDynamicRouter && appStore.getServerDynamicRouter
-      ? await getAdminRoleApi(params)
-      : await getTestRoleApi(params)
+  const res = await getCurrentUserMenusApi()
   if (res) {
-    const routers = res.data || []
+    const routers = res.data.list || []
     userStore.setRoleRouters(routers)
-    appStore.getDynamicRouter && appStore.getServerDynamicRouter
-      ? await permissionStore.generateRoutes('server', routers).catch(() => {})
-      : await permissionStore.generateRoutes('frontEnd', routers).catch(() => {})
+    await permissionStore.generateRoutes('server', routers).catch(() => {})
 
     permissionStore.getAddRouters.forEach((route) => {
       addRoute(route as RouteRecordRaw) // 动态添加可访问路由表

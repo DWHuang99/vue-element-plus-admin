@@ -22,7 +22,7 @@ const rules = reactive({
   username: [required()],
   account: [required()],
   'department.id': [required()],
-  roleId: [required()]
+  roleIds: [required()]
 })
 
 const { formRegister, formMethods } = useForm()

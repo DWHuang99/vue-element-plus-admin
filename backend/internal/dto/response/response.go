@@ -8,6 +8,7 @@ type UserInfo struct {
 	RoleID      int64     `json:"roleId"`
 	RoleCode    string    `json:"roleCode"`
 	RoleName    string    `json:"roleName"`
+	Roles       []string  `json:"roles"`
 	Permissions []string  `json:"permissions"`
 	IsActive    bool      `json:"isActive"`
 	CreatedAt   time.Time `json:"createdAt"`

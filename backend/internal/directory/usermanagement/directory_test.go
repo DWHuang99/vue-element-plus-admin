@@ -1,4 +1,4 @@
-package usermanagementgrpc
+package usermanagementdirectory
 
 import (
 	"context"
@@ -10,11 +10,11 @@ import (
 	"google.golang.org/grpc"
 )
 
-type userManagementClientStub struct {
+type clientStub struct {
 	departmentID int64
 }
 
-func (s *userManagementClientStub) CountUsersByDepartment(
+func (s *clientStub) CountUsersByDepartment(
 	_ context.Context,
 	request *pb.CountUsersByDepartmentRequest,
 	_ ...grpc.CallOption,
@@ -24,8 +24,8 @@ func (s *userManagementClientStub) CountUsersByDepartment(
 }
 
 func TestDirectoryCountsUsersByDepartment(t *testing.T) {
-	client := &userManagementClientStub{}
-	count, err := NewDirectory(client, time.Second).CountUsersByDepartment(t.Context(), 9)
+	client := &clientStub{}
+	count, err := New(client, time.Second).CountUsersByDepartment(t.Context(), 9)
 	if err != nil {
 		t.Fatalf("CountUsersByDepartment() error = %v", err)
 	}

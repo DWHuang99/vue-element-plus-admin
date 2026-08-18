@@ -5,6 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"time"
+
+	casbinrbac "vue-element-plus-admin/backend/internal/middleware/casbin"
+
+	"github.com/casbin/casbin/v3"
 )
 
 var (
@@ -21,6 +25,7 @@ type CurrentUser struct {
 	RoleCode    string
 	RoleName    string
 	Permissions []string
+	RoleCodes   []string
 	IsActive    bool
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
@@ -31,13 +36,14 @@ type UserRepositoryReader interface {
 }
 
 type UserService struct {
-	// Add any dependencies or fields needed for the service
 	repository UserRepositoryReader
+	enforcer   *casbin.SyncedEnforcer
 }
 
-func NewService(repository UserRepositoryReader) *UserService {
+func NewService(repository UserRepositoryReader, enforcer *casbin.SyncedEnforcer) *UserService {
 	return &UserService{
 		repository: repository,
+		enforcer:   enforcer,
 	}
 }
 
@@ -52,5 +58,16 @@ func (s *UserService) GetUserByID(ctx context.Context, userID int64) (*CurrentUs
 	if !user.IsActive {
 		return nil, ErrUserDisabled
 	}
+	subject := casbinrbac.UserSubject(user.ID)
+	roleSubjects, err := s.enforcer.GetImplicitRolesForUser(subject)
+	if err != nil {
+		return nil, err
+	}
+	permissionRules, err := s.enforcer.GetImplicitPermissionsForUser(subject)
+	if err != nil {
+		return nil, err
+	}
+	user.Permissions = casbinrbac.PermissionCodes(permissionRules)
+	user.RoleCodes = casbinrbac.RoleCodes(roleSubjects)
 	return user, nil
 }

@@ -10,11 +10,12 @@ import (
 )
 
 type SQLCRepository struct {
-	queries *db.Queries
+	database *sql.DB
+	queries  *db.Queries
 }
 
-func NewRepository(queries *db.Queries) *SQLCRepository {
-	return &SQLCRepository{queries: queries}
+func NewRepository(database *sql.DB, queries *db.Queries) *SQLCRepository {
+	return &SQLCRepository{database: database, queries: queries}
 }
 
 func (r *SQLCRepository) List(ctx context.Context, filter Filter) ([]UserItem, int, error) {
@@ -104,4 +105,37 @@ func (r *SQLCRepository) Delete(ctx context.Context, ids []int64) error {
 
 func (r *SQLCRepository) CountByDepartment(ctx context.Context, departmentID int64) (int64, error) {
 	return r.queries.CountUsersByDepartment(ctx, sql.NullInt64{Int64: departmentID, Valid: true})
+}
+
+func (r *SQLCRepository) GetUserIDByUsername(ctx context.Context, username string) (int64, error) {
+	row, err := r.queries.GetUserAuthByUsername(ctx, username)
+	if err != nil {
+		return 0, err
+	}
+	return row.ID, nil
+}
+
+func (r *SQLCRepository) GetRoleCode(ctx context.Context, roleID int64) (string, error) {
+	row, err := r.queries.GetRole(ctx, roleID)
+	if err != nil {
+		return "", err
+	}
+	if !row.Status {
+		return "", errors.New("role is disabled")
+	}
+	return row.Code, nil
+}
+
+func (r *SQLCRepository) GetRoleIDsByCodes(ctx context.Context, roleCodes []string) ([]int64, error) {
+	roleIDs := make([]int64, 0, len(roleCodes))
+	for _, roleCode := range roleCodes {
+		var roleID int64
+		if err := r.database.QueryRowContext(
+			ctx, "SELECT id FROM roles WHERE code = $1", roleCode,
+		).Scan(&roleID); err != nil {
+			return nil, err
+		}
+		roleIDs = append(roleIDs, roleID)
+	}
+	return roleIDs, nil
 }

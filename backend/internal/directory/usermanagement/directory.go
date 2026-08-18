@@ -1,4 +1,4 @@
-package usermanagementgrpc
+package usermanagementdirectory
 
 import (
 	"context"
@@ -12,7 +12,7 @@ type Directory struct {
 	timeout time.Duration
 }
 
-func NewDirectory(client pb.UserManagementServiceClient, timeout time.Duration) *Directory {
+func New(client pb.UserManagementServiceClient, timeout time.Duration) *Directory {
 	return &Directory{client: client, timeout: timeout}
 }
 

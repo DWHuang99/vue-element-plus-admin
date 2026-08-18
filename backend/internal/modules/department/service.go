@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	usermanagementdirectory "vue-element-plus-admin/backend/internal/directory/usermanagement"
 	"vue-element-plus-admin/backend/internal/modules/permission"
 )
 
@@ -32,14 +33,10 @@ type Input struct {
 
 type Service struct {
 	repository    Repository
-	userDirectory UserDirectory
+	userDirectory *usermanagementdirectory.Directory
 }
 
-type UserDirectory interface {
-	CountUsersByDepartment(ctx context.Context, departmentID int64) (int64, error)
-}
-
-func NewService(repository Repository, userDirectory ...UserDirectory) *Service {
+func NewService(repository Repository, userDirectory ...*usermanagementdirectory.Directory) *Service {
 	service := &Service{repository: repository}
 	if len(userDirectory) > 0 {
 		service.userDirectory = userDirectory[0]

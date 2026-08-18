@@ -113,7 +113,7 @@ const crudSchemas = reactive<CrudSchema[]>([
     }
   },
   {
-    field: 'roleId',
+    field: 'roleIds',
     label: t('userDemo.role'),
     search: {
       hidden: true
@@ -121,7 +121,8 @@ const crudSchemas = reactive<CrudSchema[]>([
     form: {
       component: 'Select',
       componentProps: {
-        clearable: true
+        clearable: true,
+        multiple: true
       },
       optionApi: async () => {
         const res = await getRoleListApi()
@@ -129,6 +130,11 @@ const crudSchemas = reactive<CrudSchema[]>([
           label: v.roleName,
           value: v.id
         }))
+      }
+    },
+    table: {
+      slots: {
+        default: (data: any) => (data.row.roles || []).join(', ')
       }
     }
   },

@@ -2,7 +2,7 @@ name: vue-element-plus-admin-backend
 
 services:
   iam-postgres:
-    image: postgres:latest
+    image: postgres:17-alpine
     pull_policy: never
     environment:
       POSTGRES_DB: ${IAM_POSTGRES_DB:-iam}
@@ -19,7 +19,7 @@ services:
       retries: 10
 
   department-postgres:
-    image: postgres:latest
+    image: postgres:17-alpine
     pull_policy: never
     environment:
       POSTGRES_DB: ${DEPARTMENT_POSTGRES_DB:-department}

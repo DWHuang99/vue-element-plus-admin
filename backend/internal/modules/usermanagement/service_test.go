@@ -3,9 +3,41 @@ package usermanagement
 import (
 	"context"
 	"testing"
+	"time"
 
+	departmentdirectory "vue-element-plus-admin/backend/internal/directory/department"
+	casbinrbac "vue-element-plus-admin/backend/internal/middleware/casbin"
 	"vue-element-plus-admin/backend/internal/security"
+	"vue-element-plus-admin/backend/pb"
+
+	"github.com/casbin/casbin/v3"
+	"github.com/casbin/casbin/v3/model"
+	"google.golang.org/grpc"
 )
+
+const serviceTestModel = `[request_definition]
+r = sub, obj
+[policy_definition]
+p = sub, obj
+[role_definition]
+g = _, _
+[policy_effect]
+e = some(where (p.eft == allow))
+[matchers]
+m = g(r.sub, p.sub) && r.obj == p.obj`
+
+func serviceTestEnforcer(t *testing.T) *casbin.SyncedEnforcer {
+	t.Helper()
+	accessModel, err := model.NewModelFromString(serviceTestModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enforcer, err := casbin.NewSyncedEnforcer(accessModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return enforcer
+}
 
 type repositoryStub struct {
 	createdInput Input
@@ -29,6 +61,19 @@ func (s *repositoryStub) Delete(context.Context, []int64) error { return nil }
 func (s *repositoryStub) CountByDepartment(context.Context, int64) (int64, error) {
 	return int64(len(s.listed)), nil
 }
+func (s *repositoryStub) GetUserIDByUsername(context.Context, string) (int64, error) {
+	return 42, nil
+}
+func (s *repositoryStub) GetRoleCode(context.Context, int64) (string, error) {
+	return "test", nil
+}
+func (s *repositoryStub) GetRoleIDsByCodes(_ context.Context, roleCodes []string) ([]int64, error) {
+	roleIDs := make([]int64, len(roleCodes))
+	for index := range roleCodes {
+		roleIDs[index] = int64(index + 1)
+	}
+	return roleIDs, nil
+}
 
 type departmentDirectoryStub struct {
 	requestedIDs []int64
@@ -37,18 +82,49 @@ type departmentDirectoryStub struct {
 	getErr       error
 }
 
-func (s *departmentDirectoryStub) Get(_ context.Context, _ int64) (DepartmentItem, error) {
-	return s.getItem, s.getErr
+func (s *departmentDirectoryStub) GetDepartment(
+	context.Context,
+	*pb.GetDepartmentRequest,
+	...grpc.CallOption,
+) (*pb.GetDepartmentResponse, error) {
+	if s.getErr != nil {
+		return nil, s.getErr
+	}
+	return departmentResponse(s.getItem), nil
 }
 
-func (s *departmentDirectoryStub) BatchGet(_ context.Context, ids []int64) ([]DepartmentItem, error) {
-	s.requestedIDs = ids
-	return s.items, nil
+func (s *departmentDirectoryStub) BatchGetDepartments(
+	_ context.Context,
+	request *pb.BatchGetDepartmentsRequest,
+	_ ...grpc.CallOption,
+) (*pb.BatchGetDepartmentsResponse, error) {
+	s.requestedIDs = request.Ids
+	departments := make([]*pb.GetDepartmentResponse, 0, len(s.items))
+	for _, item := range s.items {
+		departments = append(departments, departmentResponse(item))
+	}
+	return &pb.BatchGetDepartmentsResponse{Departments: departments}, nil
+}
+
+func departmentResponse(item DepartmentItem) *pb.GetDepartmentResponse {
+	return &pb.GetDepartmentResponse{
+		Id: item.ID, DepartmentName: item.DepartmentName, Status: item.Status != 0,
+		Remark: item.Remark, Deleting: item.Deleting,
+	}
+}
+
+func testDepartmentDirectory(client *departmentDirectoryStub) *departmentdirectory.Directory {
+	return departmentdirectory.New(client, time.Second)
 }
 
 func TestServiceCreateNormalizesAndHashes(t *testing.T) {
 	repository := &repositoryStub{}
-	service := NewService(repository, &departmentDirectoryStub{getItem: DepartmentItem{ID: 9, Status: 1}})
+	enforcer := serviceTestEnforcer(t)
+	service := NewService(
+		repository,
+		testDepartmentDirectory(&departmentDirectoryStub{getItem: DepartmentItem{ID: 9, Status: 1}}),
+		enforcer,
+	)
 	input := Input{Username: "alice", Password: "secret123", RoleID: 2}
 	input.Department.ID = 9
 	if err := service.Create(context.Background(), input); err != nil {
@@ -60,12 +136,16 @@ func TestServiceCreateNormalizesAndHashes(t *testing.T) {
 	if repository.passwordHash == input.Password || !security.Verify(input.Password, repository.passwordHash) {
 		t.Fatal("password was not securely hashed")
 	}
+	roles, err := enforcer.GetRolesForUser(casbinrbac.UserSubject(42))
+	if err != nil || len(roles) != 1 || roles[0] != casbinrbac.RoleSubject("test") {
+		t.Fatalf("Casbin user roles = %v, error = %v", roles, err)
+	}
 }
 
 func TestServiceRejectsDisabledDepartment(t *testing.T) {
 	repository := &repositoryStub{}
-	directory := &departmentDirectoryStub{getItem: DepartmentItem{ID: 9, Status: 0}}
-	err := NewService(repository, directory).Create(context.Background(), Input{
+	directory := testDepartmentDirectory(&departmentDirectoryStub{getItem: DepartmentItem{ID: 9, Status: 0}})
+	err := NewService(repository, directory, serviceTestEnforcer(t)).Create(context.Background(), Input{
 		Username: "alice", Password: "secret123", RoleID: 2, DepartmentID: 9,
 	})
 	if err != ErrDepartmentDisabled {
@@ -78,8 +158,8 @@ func TestServiceRejectsDisabledDepartment(t *testing.T) {
 
 func TestServiceRejectsDeletingDepartment(t *testing.T) {
 	repository := &repositoryStub{}
-	directory := &departmentDirectoryStub{getItem: DepartmentItem{ID: 9, Status: 1, Deleting: true}}
-	err := NewService(repository, directory).Create(context.Background(), Input{
+	directory := testDepartmentDirectory(&departmentDirectoryStub{getItem: DepartmentItem{ID: 9, Status: 1, Deleting: true}})
+	err := NewService(repository, directory, serviceTestEnforcer(t)).Create(context.Background(), Input{
 		Username: "alice", Password: "secret123", RoleID: 2, DepartmentID: 9,
 	})
 	if err != ErrDepartmentDeleting {
@@ -92,7 +172,7 @@ func TestServiceRejectsDeletingDepartment(t *testing.T) {
 
 func TestServiceUpdateNotFound(t *testing.T) {
 	repository := &repositoryStub{}
-	err := NewService(repository, nil).Update(context.Background(), 3, Input{
+	err := NewService(repository, nil, serviceTestEnforcer(t)).Update(context.Background(), 3, Input{
 		Username: "alice",
 		RoleID:   2,
 	})
@@ -107,15 +187,15 @@ func TestServiceEnrichesDepartmentsWithoutDatabaseJoin(t *testing.T) {
 		{ID: 2, DepartmentID: 9},
 		{ID: 3},
 	}}
-	directory := &departmentDirectoryStub{items: []DepartmentItem{{ID: 9, DepartmentName: "研发部"}}}
-	items, total, err := NewService(repository, directory).List(
+	directoryClient := &departmentDirectoryStub{items: []DepartmentItem{{ID: 9, DepartmentName: "研发部"}}}
+	items, total, err := NewService(repository, testDepartmentDirectory(directoryClient), serviceTestEnforcer(t)).List(
 		context.Background(), Filter{Page: 1, Size: 10},
 	)
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
-	if total != 3 || len(directory.requestedIDs) != 1 || directory.requestedIDs[0] != 9 {
-		t.Fatalf("total = %d, requested IDs = %v", total, directory.requestedIDs)
+	if total != 3 || len(directoryClient.requestedIDs) != 1 || directoryClient.requestedIDs[0] != 9 {
+		t.Fatalf("total = %d, requested IDs = %v", total, directoryClient.requestedIDs)
 	}
 	if items[0].Department == nil || items[0].Department.DepartmentName != "研发部" {
 		t.Fatalf("first department = %#v", items[0].Department)

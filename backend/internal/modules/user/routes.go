@@ -10,4 +10,5 @@ func RegisterUserRoutes(router *gin.RouterGroup, handler *UserHandler, jwtManage
 	users := router.Group("/users")
 	users.Use(jwtservice.JwtFilter(jwtManager))
 	users.GET("/me", handler.GetCurrentUser)
+	users.GET("/me/menus", handler.GetCurrentUserMenus)
 }

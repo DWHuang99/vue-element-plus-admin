@@ -8,10 +8,12 @@ import (
 	"time"
 	db "vue-element-plus-admin/backend/internal/database/iam/generated"
 	"vue-element-plus-admin/backend/internal/dto/request"
+	casbinrbac "vue-element-plus-admin/backend/internal/middleware/casbin"
 	jwtservice "vue-element-plus-admin/backend/internal/middleware/jwt"
 	rdb "vue-element-plus-admin/backend/internal/middleware/redis"
 	"vue-element-plus-admin/backend/internal/security"
 
+	"github.com/casbin/casbin/v3"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -31,6 +33,7 @@ type AuthService struct {
 	repository    *AuthRepository
 	jwtmanager    *jwtservice.JWTManager
 	refreshTokens RefreshTokenStore
+	enforcer      *casbin.SyncedEnforcer
 }
 
 type RefreshTokenStore interface {
@@ -55,11 +58,17 @@ func (s *redisRefreshTokenStore) Delete(ctx context.Context, refreshToken string
 	return rdb.DeleteRefreshToken(s.client, ctx, refreshToken)
 }
 
-func NewService(repository *AuthRepository, jwtmanager *jwtservice.JWTManager, redisClient *redis.Client) *AuthService {
+func NewService(
+	repository *AuthRepository,
+	jwtmanager *jwtservice.JWTManager,
+	redisClient *redis.Client,
+	enforcer *casbin.SyncedEnforcer,
+) *AuthService {
 	return &AuthService{
 		repository:    repository,
 		jwtmanager:    jwtmanager,
 		refreshTokens: &redisRefreshTokenStore{client: redisClient},
+		enforcer:      enforcer,
 	}
 }
 
@@ -76,8 +85,12 @@ func (s *AuthService) Login(ctx context.Context, loginreq request.LoginRequest) 
 		if !userAuth.IsActive {
 			return "", "", true, ErrUserDisabled
 		}
+		roles, permissions, err := s.authorizationForUser(userAuth.ID)
+		if err != nil {
+			return "", "", true, err
+		}
 		accessToken, err := s.jwtmanager.GenerateTokenWithPermissions(
-			userAuth.ID, []string{userAuth.RoleCode}, userAuth.Permissions,
+			userAuth.ID, roles, permissions,
 		)
 		if err != nil {
 			return "", "", true, err
@@ -112,9 +125,13 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken string) (string,
 	if !userAuth.IsActive {
 		return "", "", ErrUserDisabled
 	}
+	roles, permissions, err := s.authorizationForUser(userAuth.ID)
+	if err != nil {
+		return "", "", err
+	}
 
 	newAccessToken, err := s.jwtmanager.GenerateTokenWithPermissions(
-		userAuth.ID, []string{userAuth.RoleCode}, userAuth.Permissions,
+		userAuth.ID, roles, permissions,
 	)
 	if err != nil {
 		return "", "", err
@@ -157,8 +174,28 @@ func (s *AuthService) Register(ctx context.Context, registerRequest request.Regi
 		}
 		return nil, err
 	}
+	userSubject := casbinrbac.UserSubject(user.ID)
+	if _, err := s.enforcer.DeleteRolesForUser(userSubject); err != nil {
+		return nil, err
+	}
+	if _, err := s.enforcer.AddRoleForUser(userSubject, casbinrbac.RoleSubject(defaultRegistrationRoleCode)); err != nil {
+		return nil, err
+	}
 
 	return user, nil
+}
+
+func (s *AuthService) authorizationForUser(userID int64) ([]string, []string, error) {
+	subject := casbinrbac.UserSubject(userID)
+	roleSubjects, err := s.enforcer.GetImplicitRolesForUser(subject)
+	if err != nil {
+		return nil, nil, err
+	}
+	permissionRules, err := s.enforcer.GetImplicitPermissionsForUser(subject)
+	if err != nil {
+		return nil, nil, err
+	}
+	return casbinrbac.RoleCodes(roleSubjects), casbinrbac.PermissionCodes(permissionRules), nil
 }
 
 func (s *AuthService) Logout(ctx context.Context, refreshToken string) error {

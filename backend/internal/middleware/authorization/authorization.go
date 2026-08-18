@@ -1,13 +1,13 @@
 package authorization
 
 import (
-	"context"
 	"net/http"
 
-	db "vue-element-plus-admin/backend/internal/database/iam/generated"
 	"vue-element-plus-admin/backend/internal/dto/response"
+	casbinrbac "vue-element-plus-admin/backend/internal/middleware/casbin"
 	jwtservice "vue-element-plus-admin/backend/internal/middleware/jwt"
 
+	"github.com/casbin/casbin/v3"
 	"github.com/gin-gonic/gin"
 )
 
@@ -30,26 +30,7 @@ const (
 	DepartmentDelete = "system:department:delete"
 )
 
-type PermissionChecker interface {
-	HasPermission(ctx context.Context, userID int64, permissionCode string) (bool, error)
-}
-
-type DatabaseChecker struct {
-	queries *db.Queries
-}
-
-func NewDatabaseChecker(queries *db.Queries) *DatabaseChecker {
-	return &DatabaseChecker{queries: queries}
-}
-
-func (c *DatabaseChecker) HasPermission(ctx context.Context, userID int64, permissionCode string) (bool, error) {
-	return c.queries.HasUserPermission(ctx, db.HasUserPermissionParams{
-		UserID:         userID,
-		PermissionCode: permissionCode,
-	})
-}
-
-func RequirePermission(checker PermissionChecker, permissionCode string) gin.HandlerFunc {
+func RequirePermission(enforcer *casbin.SyncedEnforcer, permissionCode string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userIDValue, exists := c.Get(jwtservice.UserIDContextKey)
 		userID, ok := userIDValue.(int64)
@@ -59,7 +40,7 @@ func RequirePermission(checker PermissionChecker, permissionCode string) gin.Han
 			return
 		}
 
-		allowed, err := checker.HasPermission(c.Request.Context(), userID, permissionCode)
+		allowed, err := enforcer.Enforce(casbinrbac.UserSubject(userID), permissionCode)
 		if err != nil {
 			response.Error(c, http.StatusInternalServerError, 10500, "permission check failed")
 			c.Abort()

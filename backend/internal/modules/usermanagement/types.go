@@ -29,12 +29,13 @@ type Filter struct {
 }
 
 type Input struct {
-	Username     string `json:"username"`
-	Account      string `json:"account"`
-	Password     string `json:"password"`
-	Email        string `json:"email"`
-	RoleID       int64  `json:"roleId"`
-	DepartmentID int64  `json:"departmentId"`
+	Username     string  `json:"username"`
+	Account      string  `json:"account"`
+	Password     string  `json:"password"`
+	Email        string  `json:"email"`
+	RoleID       int64   `json:"roleId"`
+	RoleIDs      []int64 `json:"roleIds"`
+	DepartmentID int64   `json:"departmentId"`
 	Department   struct {
 		ID int64 `json:"id"`
 	} `json:"department"`
@@ -46,9 +47,7 @@ type Repository interface {
 	Update(ctx context.Context, id int64, input Input, passwordHash string) (bool, error)
 	Delete(ctx context.Context, ids []int64) error
 	CountByDepartment(ctx context.Context, departmentID int64) (int64, error)
-}
-
-type DepartmentDirectory interface {
-	Get(ctx context.Context, id int64) (DepartmentItem, error)
-	BatchGet(ctx context.Context, ids []int64) ([]DepartmentItem, error)
+	GetUserIDByUsername(ctx context.Context, username string) (int64, error)
+	GetRoleCode(ctx context.Context, roleID int64) (string, error)
+	GetRoleIDsByCodes(ctx context.Context, roleCodes []string) ([]int64, error)
 }

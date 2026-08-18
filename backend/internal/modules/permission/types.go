@@ -21,6 +21,8 @@ type UserItem struct {
 	CreateTime   time.Time       `json:"createTime"`
 	Role         string          `json:"role"`
 	RoleID       int64           `json:"roleId"`
+	RoleIDs      []int64         `json:"roleIds"`
+	Roles        []string        `json:"roles"`
 	Department   *DepartmentItem `json:"department,omitempty"`
 	DepartmentID int64           `json:"-"`
 }

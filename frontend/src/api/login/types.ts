@@ -9,6 +9,7 @@ export interface UserType {
   roleId: number
   roleCode: string
   roleName: string
+  roles: string[]
   permissions: string[]
   isActive: boolean
   createdAt: string

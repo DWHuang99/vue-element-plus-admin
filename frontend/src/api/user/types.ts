@@ -16,6 +16,8 @@ export interface UserItem {
   createTime: string
   role: string
   roleId: number
+  roleIds: number[]
+  roles: string[]
   department: DepartmentItem
 }
 

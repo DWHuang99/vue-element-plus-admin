@@ -4,8 +4,36 @@ import (
 	"context"
 	"testing"
 
+	casbinrbac "vue-element-plus-admin/backend/internal/middleware/casbin"
 	"vue-element-plus-admin/backend/internal/modules/permission"
+
+	"github.com/casbin/casbin/v3"
+	"github.com/casbin/casbin/v3/model"
 )
+
+const roleServiceTestModel = `[request_definition]
+r = sub, obj
+[policy_definition]
+p = sub, obj
+[role_definition]
+g = _, _
+[policy_effect]
+e = some(where (p.eft == allow))
+[matchers]
+m = g(r.sub, p.sub) && r.obj == p.obj`
+
+func roleServiceTestEnforcer(t *testing.T) *casbin.SyncedEnforcer {
+	t.Helper()
+	accessModel, err := model.NewModelFromString(roleServiceTestModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enforcer, err := casbin.NewSyncedEnforcer(accessModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return enforcer
+}
 
 type repositoryStub struct {
 	role              RoleItem
@@ -46,10 +74,12 @@ func (s *repositoryStub) Delete(context.Context, int64) error {
 
 func TestServiceCreateNormalizesRoleAccess(t *testing.T) {
 	repository := &repositoryStub{}
-	service := NewService(repository)
+	enforcer := roleServiceTestEnforcer(t)
+	service := NewService(repository, enforcer)
 	err := service.Create(context.Background(), Input{
 		Code:     "admin",
 		RoleName: "Administrator",
+		Status:   1,
 		Menu: []MenuItem{{
 			ID:   10,
 			Meta: permission.MenuMeta{Permission: []string{" user:read ", "user:read", "user:update"}},
@@ -67,11 +97,15 @@ func TestServiceCreateNormalizesRoleAccess(t *testing.T) {
 	if len(repository.globalPermissions) != 1 || repository.globalPermissions[0] != "*.*.*" {
 		t.Fatalf("global permissions = %#v", repository.globalPermissions)
 	}
+	permissions, err := enforcer.GetPermissionsForUser(casbinrbac.RoleSubject("admin"))
+	if err != nil || len(permissions) != 3 {
+		t.Fatalf("Casbin policy = %v, error = %v", permissions, err)
+	}
 }
 
 func TestServiceRejectsDeletingAssignedRole(t *testing.T) {
 	repository := &repositoryStub{userCount: 1}
-	err := NewService(repository).Delete(context.Background(), 8)
+	err := NewService(repository, roleServiceTestEnforcer(t)).Delete(context.Background(), 8)
 	if err != ErrAssignedUsers {
 		t.Fatalf("Delete() error = %v, want %v", err, ErrAssignedUsers)
 	}

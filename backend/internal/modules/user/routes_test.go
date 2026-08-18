@@ -34,7 +34,7 @@ func TestCurrentUserRoute(t *testing.T) {
 	}
 	service := &currentUserServiceStub{user: &CurrentUser{Username: "admin", IsActive: true}}
 	router := gin.New()
-	RegisterUserRoutes(router.Group("/api/v1"), NewUserHandler(service), jwtManager)
+	RegisterUserRoutes(router.Group("/api/v1"), NewUserHandler(service, nil), jwtManager)
 
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/users/me", nil)
 	request.Header.Set("Authorization", "Bearer "+token)

@@ -3,6 +3,12 @@ package department
 import (
 	"context"
 	"testing"
+	"time"
+
+	usermanagementdirectory "vue-element-plus-admin/backend/internal/directory/usermanagement"
+	"vue-element-plus-admin/backend/pb"
+
+	"google.golang.org/grpc"
 )
 
 type repositoryStub struct {
@@ -20,8 +26,12 @@ type userDirectoryStub struct {
 	err   error
 }
 
-func (s userDirectoryStub) CountUsersByDepartment(context.Context, int64) (int64, error) {
-	return s.count, s.err
+func (s userDirectoryStub) CountUsersByDepartment(
+	context.Context,
+	*pb.CountUsersByDepartmentRequest,
+	...grpc.CallOption,
+) (*pb.CountUsersByDepartmentResponse, error) {
+	return &pb.CountUsersByDepartmentResponse{Count: s.count}, s.err
 }
 
 func (s *repositoryStub) List(context.Context, int, int, string) ([]DepartmentItem, int, error) {
@@ -122,7 +132,8 @@ func TestServiceGetsDepartment(t *testing.T) {
 
 func TestServiceRejectsDeletingDepartmentWithUsers(t *testing.T) {
 	repository := &repositoryStub{}
-	err := NewService(repository, userDirectoryStub{count: 2}).Delete(context.Background(), []int64{1})
+	directory := usermanagementdirectory.New(userDirectoryStub{count: 2}, time.Second)
+	err := NewService(repository, directory).Delete(context.Background(), []int64{1})
 	if err != ErrHasUsers {
 		t.Fatalf("Delete() error = %v, want %v", err, ErrHasUsers)
 	}

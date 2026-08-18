@@ -7,9 +7,9 @@ import (
 	"vue-element-plus-admin/backend/internal/config"
 	dbconnect "vue-element-plus-admin/backend/internal/database/connect"
 	departmentdb "vue-element-plus-admin/backend/internal/database/department/generated"
+	usermanagementdirectory "vue-element-plus-admin/backend/internal/directory/usermanagement"
 	"vue-element-plus-admin/backend/internal/dto/response"
 	departmentgrpc "vue-element-plus-admin/backend/internal/grpc/department"
-	usermanagementgrpc "vue-element-plus-admin/backend/internal/grpc/usermanagement"
 	jwtservice "vue-element-plus-admin/backend/internal/middleware/jwt"
 	"vue-element-plus-admin/backend/internal/modules/department"
 	"vue-element-plus-admin/backend/pb"
@@ -53,7 +53,7 @@ func main() {
 		log.Fatalf("create IAM gRPC client: %v", err)
 	}
 	defer iamConnection.Close()
-	userDirectory := usermanagementgrpc.NewDirectory(
+	userDirectory := usermanagementdirectory.New(
 		pb.NewUserManagementServiceClient(iamConnection),
 		serviceConfig.GRPCTimeout,
 	)
