@@ -12,10 +12,19 @@ command -v docker >/dev/null 2>&1 || {
   exit 1
 }
 
-command -v pnpm >/dev/null 2>&1 || {
-  echo "pnpm command was not found. Please install pnpm first."
+if command -v node >/dev/null 2>&1 && command -v pnpm >/dev/null 2>&1; then
+  use_windows_node=false
+elif command -v node.exe >/dev/null 2>&1 \
+  && command -v pnpm.cmd >/dev/null 2>&1 \
+  && command -v cmd.exe >/dev/null 2>&1; then
+  # WSL can discover Windows npm shims, but the POSIX pnpm shim cannot find
+  # node.exe by the unqualified `node` name. Keep both the command and working
+  # directory on the Windows side so native optional dependencies match Node.
+  use_windows_node=true
+else
+  echo "Node.js and pnpm commands were not found. Please install them first."
   exit 1
-}
+fi
 
 if [[ ! -d "$frontend_dir/node_modules" ]]; then
   echo "Frontend dependencies are missing. Run 'pnpm install' in the frontend directory first."
@@ -35,12 +44,18 @@ echo "Gateway started: http://localhost:8080"
 echo "IAM API: http://localhost:8081"
 echo "Department API: http://localhost:8082"
 
-if curl --noproxy "*" --fail --silent http://127.0.0.1:4000/ >/dev/null 2>&1; then
+if curl --noproxy "*" --connect-timeout 2 --max-time 3 --fail --silent \
+  http://127.0.0.1:4000/ >/dev/null 2>&1; then
   echo "Frontend is already running: http://localhost:4000"
   exit 0
 fi
 
 echo "Starting frontend: http://localhost:4000"
 echo "Press Ctrl+C to stop the frontend dev server."
-cd "$frontend_dir"
-exec pnpm dev
+if [[ "$use_windows_node" == true ]]; then
+  frontend_windows_dir="$(wslpath -w "$frontend_dir")"
+  exec cmd.exe /d /c "pnpm.cmd --dir $frontend_windows_dir dev"
+else
+  cd "$frontend_dir"
+  exec pnpm dev
+fi

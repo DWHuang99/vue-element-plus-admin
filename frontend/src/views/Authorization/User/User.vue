@@ -16,8 +16,15 @@ import { Dialog } from '@/components/Dialog'
 import { getRoleListApi } from '@/api/role'
 import { CrudSchema, useCrudSchemas } from '@/hooks/web/useCrudSchemas'
 import { BaseButton } from '@/components/Button'
+import { refreshApi } from '@/api/login'
+import { useUserStore } from '@/store/modules/user'
+import { useRouter } from 'vue-router'
 
 const { t } = useI18n()
+
+const userStore = useUserStore()
+
+const { replace } = useRouter()
 
 const { tableRegister, tableState, tableMethods } = useTable({
   fetchDataApi: async () => {
@@ -303,6 +310,14 @@ const save = async () => {
     try {
       const res = await saveUserApi(formData)
       if (res) {
+        const isCurrentUser = String(unref(currentRow)?.id) === String(userStore.getUserInfo?.id)
+        if (isCurrentUser) {
+          const refreshResponse = await refreshApi()
+          userStore.setToken(refreshResponse.data.accessToken)
+          await replace('/dashboard/analysis')
+          window.location.reload()
+          return
+        }
         currentPage.value = 1
         getList()
       }

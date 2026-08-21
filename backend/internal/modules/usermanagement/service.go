@@ -209,11 +209,10 @@ func normalizeInput(input *Input) {
 	if input.DepartmentID == 0 {
 		input.DepartmentID = input.Department.ID
 	}
-	if len(input.RoleIDs) == 0 && input.RoleID > 0 {
-		input.RoleIDs = []int64{input.RoleID}
-	}
-	if input.RoleID == 0 && len(input.RoleIDs) > 0 {
+	if len(input.RoleIDs) > 0 {
 		input.RoleID = input.RoleIDs[0]
+	} else if input.RoleID > 0 {
+		input.RoleIDs = []int64{input.RoleID}
 	}
 }
 

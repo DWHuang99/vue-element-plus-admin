@@ -181,6 +181,16 @@ func TestServiceUpdateNotFound(t *testing.T) {
 	}
 }
 
+func TestNormalizeInputKeepsPrimaryRoleConsistentWithRoleIDs(t *testing.T) {
+	input := Input{RoleID: 2, RoleIDs: []int64{1}}
+
+	normalizeInput(&input)
+
+	if input.RoleID != 1 {
+		t.Fatalf("RoleID = %d, want first selected role ID 1", input.RoleID)
+	}
+}
+
 func TestServiceEnrichesDepartmentsWithoutDatabaseJoin(t *testing.T) {
 	repository := &repositoryStub{listed: []UserItem{
 		{ID: 1, DepartmentID: 9},

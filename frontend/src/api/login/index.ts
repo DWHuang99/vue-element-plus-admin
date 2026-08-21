@@ -13,6 +13,11 @@ export const refreshApi = (): Promise<IResponse<RefreshResponse>> => {
   return request.post({ url: '/api/v1/auth/refresh' })
 }
 
+export const getOIDCLoginURL = (): string => {
+  const apiBasePath = import.meta.env.VITE_API_BASE_PATH.replace(/\/$/, '')
+  return `${apiBasePath}/api/v1/oauth/login`
+}
+
 export const getCurrentUserApi = (): Promise<IResponse<UserType>> => {
   return request.get({ url: '/api/v1/users/me' })
 }

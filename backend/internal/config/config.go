@@ -6,8 +6,10 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -38,6 +40,15 @@ type JWTVerifierConfig struct {
 	JWKSURL  string
 	Issuer   string
 	Audience string
+}
+
+type OIDCConfig struct {
+	Enabled             bool
+	Issuer              string
+	ClientID            string
+	ClientSecret        string
+	RedirectURL         string
+	FrontendRedirectURL string
 }
 
 func getEnv(key string, fallback string) string {
@@ -214,4 +225,55 @@ func loadRSAPublicKey(path string) (*rsa.PublicKey, error) {
 	}
 
 	return nil, fmt.Errorf("parse JWT public key %q: key is not a supported RSA public key", path)
+}
+
+func LoadOidcConfig() (*OIDCConfig, error) {
+	enabled, err := strconv.ParseBool(getEnv("OIDC_ENABLED", "false"))
+	if err != nil {
+		return nil, errors.New("OIDC_ENABLED must be true or false")
+	}
+	configuration := &OIDCConfig{
+		Enabled:             enabled,
+		Issuer:              strings.TrimSpace(os.Getenv("OIDC_ISSUER")),
+		ClientID:            strings.TrimSpace(os.Getenv("OIDC_CLIENT_ID")),
+		ClientSecret:        strings.TrimSpace(os.Getenv("OIDC_CLIENT_SECRET")),
+		RedirectURL:         strings.TrimSpace(os.Getenv("OIDC_REDIRECT_URL")),
+		FrontendRedirectURL: strings.TrimSpace(os.Getenv("OIDC_FRONTEND_REDIRECT_URL")),
+	}
+	if !configuration.Enabled {
+		return configuration, nil
+	}
+
+	required := []struct {
+		key   string
+		value string
+	}{
+		{key: "OIDC_ISSUER", value: configuration.Issuer},
+		{key: "OIDC_CLIENT_ID", value: configuration.ClientID},
+		{key: "OIDC_CLIENT_SECRET", value: configuration.ClientSecret},
+		{key: "OIDC_REDIRECT_URL", value: configuration.RedirectURL},
+		{key: "OIDC_FRONTEND_REDIRECT_URL", value: configuration.FrontendRedirectURL},
+	}
+	for _, item := range required {
+		if item.value == "" {
+			return nil, fmt.Errorf("%s is required", item.key)
+		}
+	}
+
+	URLs := []struct {
+		key   string
+		value string
+	}{
+		{key: "OIDC_ISSUER", value: configuration.Issuer},
+		{key: "OIDC_REDIRECT_URL", value: configuration.RedirectURL},
+		{key: "OIDC_FRONTEND_REDIRECT_URL", value: configuration.FrontendRedirectURL},
+	}
+	for _, item := range URLs {
+		parsed, err := url.Parse(item.value)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+			return nil, fmt.Errorf("%s must be an absolute HTTP(S) URL", item.key)
+		}
+	}
+
+	return configuration, nil
 }

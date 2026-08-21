@@ -113,6 +113,8 @@ export default {
     checkPassword: '确认密码',
     login: '登录',
     otherLogin: '其它登录方式',
+    oidcLogin: '使用 Google 登录',
+    oidcLoginFailed: 'Google 登录失败，请重试',
     remember: '记住我',
     hasUser: '已有账号？去登录',
     forgetPassword: '忘记密码',

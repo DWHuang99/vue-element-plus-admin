@@ -3,11 +3,13 @@ package apirouter
 import (
 	"crypto/rsa"
 	"database/sql"
+	"vue-element-plus-admin/backend/internal/middleware/oidc"
 
 	db "vue-element-plus-admin/backend/internal/database/iam/generated"
 	jwtservice "vue-element-plus-admin/backend/internal/middleware/jwt"
 	"vue-element-plus-admin/backend/internal/modules/auth"
 	"vue-element-plus-admin/backend/internal/modules/menu"
+	"vue-element-plus-admin/backend/internal/modules/oauth"
 	"vue-element-plus-admin/backend/internal/modules/role"
 	"vue-element-plus-admin/backend/internal/modules/user"
 	"vue-element-plus-admin/backend/internal/modules/usermanagement"
@@ -29,7 +31,7 @@ func AuthRouter(
 		api,
 		auth.NewAuthHandler(
 			auth.NewService(
-				auth.NewRepository(queries),
+				user.NewRepository(queries),
 				jwtmanager,
 				rdbClient,
 				casbinEnforcer,
@@ -100,4 +102,38 @@ func RoleRouter(
 
 func PublicKeyRouter(router gin.IRoutes, publicKey *rsa.PublicKey, keyID string) {
 	jwtservice.RegisterJWKSRoutes(router, jwtservice.NewJWKSHandler(publicKey, keyID))
+}
+
+func Oauth2Router(
+	api *gin.RouterGroup,
+	oidcAuth *oidc.OIDCAuth,
+	database *sql.DB,
+	queries *db.Queries,
+	jwtmanager *jwtservice.JWTManager,
+	rdbClient *redis.Client,
+	cookieSecure bool,
+	casbinEnforcer *casbin.SyncedEnforcer,
+	frontendRedirectURL string,
+) {
+	userRepository := user.NewRepository(queries)
+	authService := auth.NewService(
+		userRepository,
+		jwtmanager,
+		rdbClient,
+		casbinEnforcer,
+	)
+	oauth.OidcRegisterRoutes(api,
+		oauth.NewOauthHandler(
+			oauth.NewExternalUserService(
+				database,
+				oauth.NewGoogleUserRepository(queries),
+				userRepository,
+				oidcAuth,
+				rdbClient,
+			),
+			authService,
+			cookieSecure,
+			frontendRedirectURL,
+		),
+	)
 }

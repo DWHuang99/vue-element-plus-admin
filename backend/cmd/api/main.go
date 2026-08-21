@@ -12,6 +12,7 @@ import (
 	usermanagementgrpc "vue-element-plus-admin/backend/internal/grpc/usermanagement"
 	casbinrbac "vue-element-plus-admin/backend/internal/middleware/casbin"
 	jwtservice "vue-element-plus-admin/backend/internal/middleware/jwt"
+	"vue-element-plus-admin/backend/internal/middleware/oidc"
 	rdb "vue-element-plus-admin/backend/internal/middleware/redis"
 	"vue-element-plus-admin/backend/internal/modules/usermanagement"
 	apirouter "vue-element-plus-admin/backend/internal/router"
@@ -69,6 +70,23 @@ func main() {
 			log.Fatalf("run IAM gRPC service: %v", err)
 		}
 	}()
+	oidcConfig, err := config.LoadOidcConfig()
+	if err != nil {
+		log.Fatalf("load OIDC configuration: %v", err)
+	}
+	var oidcAuth *oidc.OIDCAuth
+	if oidcConfig.Enabled {
+		oidcAuth, err = oidc.NewOIDCAuth(
+			ctx,
+			oidcConfig.Issuer,
+			oidcConfig.ClientID,
+			oidcConfig.ClientSecret,
+			oidcConfig.RedirectURL,
+		)
+		if err != nil {
+			log.Fatalf("initialize OIDC authentication: %v", err)
+		}
+	}
 
 	defer database.Close()
 	defer rdbClient.Close()
@@ -93,6 +111,19 @@ func main() {
 	)
 	apirouter.MenuRouter(api, database, queries, jwtmanager, casbinEnforcer)
 	apirouter.RoleRouter(api, queries, database, jwtmanager, casbinEnforcer)
+	if oidcConfig.Enabled {
+		apirouter.Oauth2Router(
+			api,
+			oidcAuth,
+			database,
+			queries,
+			jwtmanager,
+			rdbClient,
+			cookieConfig.Secure,
+			casbinEnforcer,
+			oidcConfig.FrontendRedirectURL,
+		)
+	}
 
 	router.Run()
 }

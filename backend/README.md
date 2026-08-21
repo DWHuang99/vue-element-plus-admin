@@ -23,8 +23,14 @@ IAM 的 `users.department_id` 是外部引用，不存在到 Department 数据�
 
 更新两个数据库并重新生成 sqlc：
 
-```powershell
-.\.script\update-database.ps1
+```bash
+bash ./.script/update-database.sh
+```
+
+只重新生成两套 sqlc 代码：
+
+```bash
+bash ./.script/generate-sqlc.sh
 ```
 
 修改 proto 后重新生成 Go 代码（需要 `protoc`、`protoc-gen-go` 和 `protoc-gen-go-grpc`）：
@@ -64,6 +70,25 @@ SERVICE_GRPC_TIMEOUT_MS=3000
 Department 监听地址由 `DEPARTMENT_GRPC_ADDR` 配置，Compose 中使用 `:50051`。
 
 Department 调用 IAM gRPC 使用 `IAM_GRPC_TARGET=iam-api:50051`，IAM 监听地址由 `IAM_GRPC_ADDR=:50051` 配置。
+
+## OIDC 登录
+
+IAM API 启动时会校验以下 OIDC 配置，缺失或 URL 格式错误时会直接停止启动：
+
+```text
+OIDC_ENABLED=true
+OIDC_ISSUER=https://accounts.google.com
+OIDC_CLIENT_ID=<provider-client-id>
+OIDC_CLIENT_SECRET=<provider-client-secret>
+OIDC_REDIRECT_URL=http://localhost:8080/api/v1/oauth/callback
+OIDC_FRONTEND_REDIRECT_URL=http://localhost:4000/#/login
+```
+
+OIDC 默认关闭；`OIDC_ENABLED=false` 时 IAM 不初始化服务商，也不注册 `/api/v1/oauth/*` 路由，因此未配置 OIDC 的部署仍可正常启动。开启后，其余五项配置均为必填。
+
+`OIDC_REDIRECT_URL` 必须与服务商控制台登记的回调地址完全一致。登录成功后，IAM 设置 HttpOnly refresh cookie 并跳转到 `OIDC_FRONTEND_REDIRECT_URL`；前端再调用 `/api/v1/auth/refresh` 建立本系统会话，不会把 access token 放进 URL。
+
+通过 Docker Compose 启动前，请复制 `.env.example` 为 `.env` 并替换 OIDC client ID 和 secret。前端构建还需设置 `VITE_OIDC_ENABLED=true` 才会显示 OIDC 登录入口。生产环境使用 HTTPS 时，还应设置 `COOKIE_SECURE=true`，并把两个回调 URL 改成实际 HTTPS 地址。
 
 ## 独立发布
 

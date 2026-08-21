@@ -4,7 +4,13 @@ import { Form, FormSchema } from '@/components/Form'
 import { useI18n } from '@/hooks/web/useI18n'
 import { ElCheckbox, ElLink, ElAlert } from 'element-plus'
 import { useForm } from '@/hooks/web/useForm'
-import { loginApi, getCurrentUserApi, getCurrentUserMenusApi } from '@/api/login'
+import {
+  loginApi,
+  refreshApi,
+  getOIDCLoginURL,
+  getCurrentUserApi,
+  getCurrentUserMenusApi
+} from '@/api/login'
 import { usePermissionStore } from '@/store/modules/permission'
 import { useRouter } from 'vue-router'
 import type { RouteLocationNormalizedLoaded, RouteRecordRaw } from 'vue-router'
@@ -13,6 +19,7 @@ import { useValidator } from '@/hooks/web/useValidator'
 import { Icon } from '@/components/Icon'
 import { useUserStore } from '@/store/modules/user'
 import { BaseButton } from '@/components/Button'
+import { pathResolve } from '@/utils/routerHelper'
 
 const { required } = useValidator()
 
@@ -22,9 +29,11 @@ const userStore = useUserStore()
 
 const permissionStore = usePermissionStore()
 
-const { currentRoute, addRoute, push } = useRouter()
+const { currentRoute, addRoute, push, replace } = useRouter()
 
 const { t } = useI18n()
+
+const oidcEnabled = import.meta.env.VITE_OIDC_ENABLED === 'true'
 
 const rules = {
   username: [required()],
@@ -158,6 +167,7 @@ const schema = reactive<FormSchema[]>([
   },
   {
     field: 'other',
+    hidden: !oidcEnabled,
     component: 'Divider',
     label: t('login.otherLogin'),
     componentProps: {
@@ -166,6 +176,7 @@ const schema = reactive<FormSchema[]>([
   },
   {
     field: 'otherIcon',
+    hidden: !oidcEnabled,
     colProps: {
       span: 24
     },
@@ -174,35 +185,11 @@ const schema = reactive<FormSchema[]>([
         default: () => {
           return (
             <>
-              <div class="flex justify-between w-[100%]">
-                <Icon
-                  icon="vi-ant-design:github-filled"
-                  size={iconSize}
-                  class="cursor-pointer ant-icon"
-                  color={iconColor}
-                  hoverColor={hoverColor}
-                />
-                <Icon
-                  icon="vi-ant-design:wechat-filled"
-                  size={iconSize}
-                  class="cursor-pointer ant-icon"
-                  color={iconColor}
-                  hoverColor={hoverColor}
-                />
-                <Icon
-                  icon="vi-ant-design:alipay-circle-filled"
-                  size={iconSize}
-                  color={iconColor}
-                  hoverColor={hoverColor}
-                  class="cursor-pointer ant-icon"
-                />
-                <Icon
-                  icon="vi-ant-design:weibo-circle-filled"
-                  size={iconSize}
-                  color={iconColor}
-                  hoverColor={hoverColor}
-                  class="cursor-pointer ant-icon"
-                />
+              <div class="w-[100%]">
+                <BaseButton class="w-[100%]" loading={loading.value} onClick={signInWithOIDC}>
+                  <Icon icon="vi-ant-design:google-circle-filled" class="mr-8px" />
+                  {t('login.oidcLogin')}
+                </BaseButton>
               </div>
             </>
           )
@@ -211,8 +198,6 @@ const schema = reactive<FormSchema[]>([
     }
   }
 ])
-
-const iconSize = 30
 
 const remember = ref(userStore.getRememberMe)
 
@@ -224,25 +209,34 @@ const initLoginInfo = () => {
     setValues({ username: savedUsername })
   }
 }
-onMounted(() => {
-  initLoginInfo()
-})
-
 const { formRegister, formMethods } = useForm()
 const { getFormData, getElFormExpose, setValues } = formMethods
 
 const loading = ref(false)
 
-const iconColor = '#999'
-
-const hoverColor = 'var(--el-color-primary)'
-
 const redirect = ref<string>('')
+
+const findFirstAccessiblePath = (
+  routers: AppRouteRecordRaw[],
+  parentPath = '/'
+): string | undefined => {
+  for (const route of routers) {
+    if (route.name === '404Page') continue
+
+    const routePath = pathResolve(parentPath, route.path)
+    const childPath = route.children?.length
+      ? findFirstAccessiblePath(route.children, routePath)
+      : undefined
+
+    if (childPath) return childPath
+    if (route.component) return routePath
+  }
+}
 
 const getRedirectPath = () => {
   return redirect.value && redirect.value !== '/404'
     ? redirect.value
-    : permissionStore.addRouters[0]?.path || '/'
+    : findFirstAccessiblePath(permissionStore.addRouters) || '/'
 }
 
 watch(
@@ -266,6 +260,13 @@ watch(
 )
 
 // 登录
+const establishSession = async (accessToken: string) => {
+  userStore.setToken(accessToken)
+  const currentUser = await getCurrentUserApi()
+  userStore.setUserInfo(currentUser.data)
+  await getRole()
+}
+
 const signIn = async () => {
   const formRef = await getElFormExpose()
   await formRef?.validate(async (isValid) => {
@@ -285,10 +286,7 @@ const signIn = async () => {
             userStore.setLoginInfo(undefined)
           }
           userStore.setRememberMe(unref(remember))
-          userStore.setToken(res.data.accessToken)
-          const currentUser = await getCurrentUserApi()
-          userStore.setUserInfo(currentUser.data)
-          await getRole()
+          await establishSession(res.data.accessToken)
         }
       } catch (error: any) {
         userStore.setToken('')
@@ -300,6 +298,44 @@ const signIn = async () => {
     }
   })
 }
+
+const signInWithOIDC = () => {
+  errorMessage.value = ''
+  window.location.assign(getOIDCLoginURL())
+}
+
+const clearOAuthQuery = async () => {
+  const query = { ...currentRoute.value.query }
+  delete query.oauth
+  delete query.error
+  await replace({ query })
+}
+
+const finishOIDCLogin = async () => {
+  loading.value = true
+  errorMessage.value = ''
+  try {
+    const response = await refreshApi()
+    await establishSession(response.data.accessToken)
+  } catch (error: any) {
+    userStore.setToken('')
+    userStore.setUserInfo(undefined)
+    errorMessage.value = error?.message || t('login.oidcLoginFailed')
+    await clearOAuthQuery()
+  } finally {
+    loading.value = false
+  }
+}
+
+onMounted(async () => {
+  initLoginInfo()
+  if (currentRoute.value.query.oauth === 'success') {
+    await finishOIDCLogin()
+  } else if (currentRoute.value.query.oauth === 'error') {
+    errorMessage.value = t('login.oidcLoginFailed')
+    await clearOAuthQuery()
+  }
+})
 
 // 获取角色信息
 const getRole = async () => {

@@ -115,6 +115,8 @@ export default {
     checkPassword: 'Confirm password',
     login: 'Sign in',
     otherLogin: 'Sign in with',
+    oidcLogin: 'Sign in with Google',
+    oidcLoginFailed: 'Google sign-in failed. Please try again.',
     remember: 'Remember me',
     hasUser: 'Existing account? Go to login',
     forgetPassword: 'Forget password',

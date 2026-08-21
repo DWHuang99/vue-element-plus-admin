@@ -210,3 +210,24 @@ DELETE FROM users
 WHERE id IN (
     SELECT value::BIGINT FROM jsonb_array_elements_text(sqlc.arg('ids')::JSONB)
 );
+
+-- name: FindExternalUser :one
+SELECT id, user_id, provider_issuer, provider_subject, email
+FROM user_external_identity
+WHERE provider_issuer = sqlc.arg('provider_issuer')
+  AND provider_subject = sqlc.arg('provider_subject');
+
+-- name: CreateExternalUser :one
+INSERT INTO user_external_identity (
+    user_id,
+    provider_issuer,
+    provider_subject,
+    email
+)
+VALUES (
+    sqlc.arg('user_id')::BIGINT,
+    sqlc.arg('provider_issuer')::TEXT,
+    sqlc.arg('provider_subject')::TEXT,
+    sqlc.arg('email')::TEXT
+)
+RETURNING id, user_id, provider_issuer, provider_subject, email;
