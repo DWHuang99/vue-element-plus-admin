@@ -45,6 +45,8 @@ func TestLoadGatewayConfigUsesEnvironment(t *testing.T) {
 	t.Setenv("IAM_SERVICE_URL", "http://iam.internal:9000")
 	t.Setenv("DEPARTMENT_SERVICE_URL", "http://department.internal:9000")
 	t.Setenv("GATEWAY_DIAL_TIMEOUT_MS", "250")
+	t.Setenv("GATEWAY_RESPONSE_HEADER_TIMEOUT_MS", "20000")
+	t.Setenv("GATEWAY_WRITE_TIMEOUT_MS", "25000")
 	configuration, err := loadGatewayConfig()
 	if err != nil {
 		t.Fatalf("loadGatewayConfig() error = %v", err)
@@ -57,5 +59,11 @@ func TestLoadGatewayConfigUsesEnvironment(t *testing.T) {
 	}
 	if configuration.dialTimeout.Milliseconds() != 250 {
 		t.Fatalf("dial timeout = %s, want 250ms", configuration.dialTimeout)
+	}
+	if configuration.responseHeaderTimeout.Milliseconds() != 20000 {
+		t.Fatalf("response header timeout = %s, want 20s", configuration.responseHeaderTimeout)
+	}
+	if configuration.writeTimeout.Milliseconds() != 25000 {
+		t.Fatalf("write timeout = %s, want 25s", configuration.writeTimeout)
 	}
 }

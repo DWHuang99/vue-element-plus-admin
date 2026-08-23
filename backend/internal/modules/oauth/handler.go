@@ -138,6 +138,7 @@ func (h *OauthHandler) Login(c *gin.Context) {
 		oauth2.S256ChallengeOption(verifier),
 		oauth2.SetAuthURLParam("nonce", nonce),
 		oauth2.SetAuthURLParam("prompt", "select_account consent"),
+		oauth2.SetAuthURLParam("access_type", "offline"),
 	)
 
 	c.Redirect(302, loginURL)
@@ -223,6 +224,12 @@ func (h *OauthHandler) Callback(c *gin.Context) {
 	)
 	if err != nil {
 		h.redirectToFrontend(c, "error", "local_user_failed")
+		return
+	}
+
+	err = h.service.AddToken(ctx, oauthToken, userID, idToken)
+	if err != nil {
+		h.redirectToFrontend(c, "error", "add_token_failed")
 		return
 	}
 

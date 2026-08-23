@@ -3,6 +3,8 @@ package config
 import (
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -49,6 +51,7 @@ type OIDCConfig struct {
 	ClientSecret        string
 	RedirectURL         string
 	FrontendRedirectURL string
+	TokenEncryptionKey  []byte
 }
 
 func getEnv(key string, fallback string) string {
@@ -232,6 +235,7 @@ func LoadOidcConfig() (*OIDCConfig, error) {
 	if err != nil {
 		return nil, errors.New("OIDC_ENABLED must be true or false")
 	}
+	tokenEncryptionKeyValue := os.Getenv("KEY_ENCRYPTION_KEY")
 	configuration := &OIDCConfig{
 		Enabled:             enabled,
 		Issuer:              strings.TrimSpace(os.Getenv("OIDC_ISSUER")),
@@ -253,6 +257,7 @@ func LoadOidcConfig() (*OIDCConfig, error) {
 		{key: "OIDC_CLIENT_SECRET", value: configuration.ClientSecret},
 		{key: "OIDC_REDIRECT_URL", value: configuration.RedirectURL},
 		{key: "OIDC_FRONTEND_REDIRECT_URL", value: configuration.FrontendRedirectURL},
+		{key: "KEY_ENCRYPTION_KEY", value: tokenEncryptionKeyValue},
 	}
 	for _, item := range required {
 		if item.value == "" {
@@ -274,6 +279,29 @@ func LoadOidcConfig() (*OIDCConfig, error) {
 			return nil, fmt.Errorf("%s must be an absolute HTTP(S) URL", item.key)
 		}
 	}
+	configuration.TokenEncryptionKey, err = parseTokenEncryptionKey(tokenEncryptionKeyValue)
+	if err != nil {
+		return nil, err
+	}
 
 	return configuration, nil
+}
+
+func parseTokenEncryptionKey(value string) ([]byte, error) {
+	if validAESKeyLength(len(value)) {
+		return []byte(value), nil
+	}
+	if decoded, err := hex.DecodeString(value); err == nil && validAESKeyLength(len(decoded)) {
+		return decoded, nil
+	}
+	if decoded, err := base64.StdEncoding.DecodeString(value); err == nil && validAESKeyLength(len(decoded)) {
+		return decoded, nil
+	}
+	return nil, errors.New(
+		"KEY_ENCRYPTION_KEY must decode to 16, 24, or 32 bytes (raw, hex, or Base64)",
+	)
+}
+
+func validAESKeyLength(length int) bool {
+	return length == 16 || length == 24 || length == 32
 }

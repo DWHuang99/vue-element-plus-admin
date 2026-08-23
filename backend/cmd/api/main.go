@@ -122,7 +122,9 @@ func main() {
 			cookieConfig.Secure,
 			casbinEnforcer,
 			oidcConfig.FrontendRedirectURL,
+			oidcConfig.TokenEncryptionKey,
 		)
+		apirouter.GmailRouter(api, queries, jwtmanager, oidcAuth, oidcConfig.TokenEncryptionKey)
 	}
 
 	router.Run()

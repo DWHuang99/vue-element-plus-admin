@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"vue-element-plus-admin/backend/internal/middleware/oidc"
 
+	gmailapi "vue-element-plus-admin/backend/external/api/gmail"
 	db "vue-element-plus-admin/backend/internal/database/iam/generated"
 	jwtservice "vue-element-plus-admin/backend/internal/middleware/jwt"
 	"vue-element-plus-admin/backend/internal/modules/auth"
@@ -114,6 +115,7 @@ func Oauth2Router(
 	cookieSecure bool,
 	casbinEnforcer *casbin.SyncedEnforcer,
 	frontendRedirectURL string,
+	encryptionKey []byte,
 ) {
 	userRepository := user.NewRepository(queries)
 	authService := auth.NewService(
@@ -130,10 +132,31 @@ func Oauth2Router(
 				userRepository,
 				oidcAuth,
 				rdbClient,
+				encryptionKey,
 			),
 			authService,
 			cookieSecure,
 			frontendRedirectURL,
 		),
+	)
+}
+
+func GmailRouter(
+	api *gin.RouterGroup,
+	queries *db.Queries,
+	jwtmanager *jwtservice.JWTManager,
+	oidcAuth *oidc.OIDCAuth,
+	encryptionKey []byte,
+) {
+	gmailapi.GmailRouter(
+		api,
+		gmailapi.NewGmailHandler(
+			gmailapi.NewGmailService(
+				oauth.NewGoogleUserRepository(queries),
+				oidcAuth,
+				encryptionKey,
+			),
+		),
+		jwtmanager,
 	)
 }

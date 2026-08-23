@@ -126,6 +126,25 @@ export default {
     codePlaceholder: 'Please input verification code',
     getCode: 'Get code'
   },
+  gmail: {
+    title: 'Unread Google Mail',
+    description: 'Recent unread messages from your Gmail inbox',
+    unreadCount: '{count} unread messages',
+    refresh: 'Refresh',
+    retry: 'Try again',
+    empty: 'There are no unread messages',
+    noSubject: '(No subject)',
+    noContent: 'No message content',
+    unknownSender: 'Unknown sender',
+    from: 'From',
+    to: 'To',
+    date: 'Date',
+    authorizationRequired: 'Google Mail authorization required',
+    authorizationDescription: 'Authorize Gmail read-only access with Google before viewing mail.',
+    authorize: 'Authorize with Google',
+    loadFailed: 'Unable to load mail',
+    loadFailedDescription: 'Gmail messages cannot be loaded right now. Please try again later.'
+  },
   router: {
     login: 'Login',
     level: 'Multi level menu',
@@ -136,6 +155,7 @@ export default {
     menu12: 'Menu1-2',
     menu2: 'Menu2',
     dashboard: 'Dashboard',
+    mail: 'Mail',
     analysis: 'Analysis',
     workplace: 'Workplace',
     guide: 'Guide',

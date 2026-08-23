@@ -97,6 +97,7 @@ func setValidOIDCEnvironment(t *testing.T) {
 	t.Setenv("OIDC_CLIENT_SECRET", "client-secret")
 	t.Setenv("OIDC_REDIRECT_URL", "http://localhost:8080/api/v1/oauth/callback")
 	t.Setenv("OIDC_FRONTEND_REDIRECT_URL", "http://localhost:4000/login")
+	t.Setenv("KEY_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
 }
 
 func TestLoadOidcConfigAllowsDisabledProvider(t *testing.T) {
@@ -146,5 +147,27 @@ func TestLoadOidcConfigRejectsInvalidURL(t *testing.T) {
 
 	if _, err := LoadOidcConfig(); err == nil || !strings.Contains(err.Error(), "OIDC_REDIRECT_URL") {
 		t.Fatalf("LoadOidcConfig() error = %v, want OIDC_REDIRECT_URL error", err)
+	}
+}
+
+func TestLoadOidcConfigRejectsInvalidEncryptionKey(t *testing.T) {
+	setValidOIDCEnvironment(t)
+	t.Setenv("KEY_ENCRYPTION_KEY", "too-short")
+
+	if _, err := LoadOidcConfig(); err == nil || !strings.Contains(err.Error(), "KEY_ENCRYPTION_KEY") {
+		t.Fatalf("LoadOidcConfig() error = %v, want KEY_ENCRYPTION_KEY error", err)
+	}
+}
+
+func TestLoadOidcConfigDecodesHexEncryptionKey(t *testing.T) {
+	setValidOIDCEnvironment(t)
+	t.Setenv("KEY_ENCRYPTION_KEY", strings.Repeat("ab", 32))
+
+	configuration, err := LoadOidcConfig()
+	if err != nil {
+		t.Fatalf("LoadOidcConfig() error = %v", err)
+	}
+	if len(configuration.TokenEncryptionKey) != 32 {
+		t.Fatalf("decoded key length = %d, want 32", len(configuration.TokenEncryptionKey))
 	}
 }

@@ -142,3 +142,26 @@ func TestFindOrCreateUserRejectsInvalidIdentity(t *testing.T) {
 		t.Fatalf("FindOrCreateUser() error = %v, want %v", err, ErrInvalidExternalIdentity)
 	}
 }
+
+func TestEncryptOptionalTokenPreservesEmptyRefreshToken(t *testing.T) {
+	key := []byte("0123456789abcdef0123456789abcdef")
+	encrypted, err := encryptOptionalToken(key, "")
+	if err != nil {
+		t.Fatalf("encryptOptionalToken() error = %v", err)
+	}
+	if encrypted != "" {
+		t.Fatalf("encryptOptionalToken() = %q, want empty value for SQL preservation", encrypted)
+	}
+
+	encrypted, err = encryptOptionalToken(key, "refresh-token")
+	if err != nil {
+		t.Fatalf("encryptOptionalToken(non-empty) error = %v", err)
+	}
+	decrypted, err := security.Decrypt(key, []byte(encrypted))
+	if err != nil {
+		t.Fatalf("Decrypt() error = %v", err)
+	}
+	if string(decrypted) != "refresh-token" {
+		t.Fatalf("decrypted token = %q, want refresh-token", decrypted)
+	}
+}

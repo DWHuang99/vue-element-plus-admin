@@ -124,6 +124,25 @@ export default {
     codePlaceholder: '请输入验证码',
     getCode: '获取验证码'
   },
+  gmail: {
+    title: 'Google 未读邮件',
+    description: '显示 Gmail 收件箱中最近的未读邮件',
+    unreadCount: '共 {count} 封未读',
+    refresh: '刷新',
+    retry: '重新加载',
+    empty: '当前没有未读邮件',
+    noSubject: '（无主题）',
+    noContent: '暂无正文内容',
+    unknownSender: '未知发件人',
+    from: '发件人',
+    to: '收件人',
+    date: '时间',
+    authorizationRequired: '需要 Google 邮箱授权',
+    authorizationDescription: '请使用 Google 重新授权 Gmail 只读权限后再查看邮件。',
+    authorize: '前往 Google 授权',
+    loadFailed: '邮件加载失败',
+    loadFailedDescription: '暂时无法读取 Gmail 邮件，请稍后重试。'
+  },
   router: {
     login: '登录',
     level: '多级菜单',
@@ -134,6 +153,7 @@ export default {
     menu12: '菜单1-2',
     menu2: '菜单2',
     dashboard: '首页',
+    mail: '邮件',
     analysis: '分析页',
     workplace: '工作台',
     guide: '引导',

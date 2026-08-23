@@ -10,7 +10,87 @@ import (
 	"database/sql"
 	"encoding/json"
 	"time"
+
+	"github.com/lib/pq"
 )
+
+const addGoogleToken = `-- name: AddGoogleToken :one
+INSERT INTO google_integrations (
+    user_id,
+    provider_subject,
+    access_token_encrypted,
+    refresh_token_encrypted,
+    token_type,
+    expiry,
+    scopes
+)
+VALUES (
+    $1::BIGINT,
+    $2::TEXT,
+    $3::TEXT,
+    $4::TEXT,
+    $5::TEXT,
+    $6::TIMESTAMPTZ,
+    $7::TEXT[]
+)
+ON CONFLICT (user_id) DO UPDATE SET
+    access_token_encrypted = EXCLUDED.access_token_encrypted,
+    refresh_token_encrypted = CASE
+        WHEN EXCLUDED.refresh_token_encrypted <> ''
+        THEN EXCLUDED.refresh_token_encrypted
+        ELSE google_integrations.refresh_token_encrypted
+    END,
+    token_type = EXCLUDED.token_type,
+    expiry = EXCLUDED.expiry,
+    scopes = EXCLUDED.scopes,
+    updated_at = CURRENT_TIMESTAMP
+RETURNING id, user_id, provider_subject, access_token_encrypted, refresh_token_encrypted, token_type, expiry, scopes
+`
+
+type AddGoogleTokenParams struct {
+	UserID                int64     `json:"user_id"`
+	ProviderSubject       string    `json:"provider_subject"`
+	AccessTokenEncrypted  string    `json:"access_token_encrypted"`
+	RefreshTokenEncrypted string    `json:"refresh_token_encrypted"`
+	TokenType             string    `json:"token_type"`
+	Expiry                time.Time `json:"expiry"`
+	Scopes                []string  `json:"scopes"`
+}
+
+type AddGoogleTokenRow struct {
+	ID                    int64     `json:"id"`
+	UserID                int64     `json:"user_id"`
+	ProviderSubject       string    `json:"provider_subject"`
+	AccessTokenEncrypted  string    `json:"access_token_encrypted"`
+	RefreshTokenEncrypted string    `json:"refresh_token_encrypted"`
+	TokenType             string    `json:"token_type"`
+	Expiry                time.Time `json:"expiry"`
+	Scopes                []string  `json:"scopes"`
+}
+
+func (q *Queries) AddGoogleToken(ctx context.Context, arg AddGoogleTokenParams) (AddGoogleTokenRow, error) {
+	row := q.db.QueryRowContext(ctx, addGoogleToken,
+		arg.UserID,
+		arg.ProviderSubject,
+		arg.AccessTokenEncrypted,
+		arg.RefreshTokenEncrypted,
+		arg.TokenType,
+		arg.Expiry,
+		pq.Array(arg.Scopes),
+	)
+	var i AddGoogleTokenRow
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.ProviderSubject,
+		&i.AccessTokenEncrypted,
+		&i.RefreshTokenEncrypted,
+		&i.TokenType,
+		&i.Expiry,
+		pq.Array(&i.Scopes),
+	)
+	return i, err
+}
 
 const addUserByRoleCode = `-- name: AddUserByRoleCode :one
 INSERT INTO users (username, password_hash, role_id)
@@ -361,6 +441,34 @@ func (q *Queries) FindExternalUser(ctx context.Context, arg FindExternalUserPara
 		&i.ProviderIssuer,
 		&i.ProviderSubject,
 		&i.Email,
+	)
+	return i, err
+}
+
+const getGoogleTokenByUserID = `-- name: GetGoogleTokenByUserID :one
+SELECT access_token_encrypted, refresh_token_encrypted, expiry,provider_subject,token_type
+FROM google_integrations
+WHERE user_id = $1::BIGINT
+and token_type = 'Bearer'
+`
+
+type GetGoogleTokenByUserIDRow struct {
+	AccessTokenEncrypted  string    `json:"access_token_encrypted"`
+	RefreshTokenEncrypted string    `json:"refresh_token_encrypted"`
+	Expiry                time.Time `json:"expiry"`
+	ProviderSubject       string    `json:"provider_subject"`
+	TokenType             string    `json:"token_type"`
+}
+
+func (q *Queries) GetGoogleTokenByUserID(ctx context.Context, userID int64) (GetGoogleTokenByUserIDRow, error) {
+	row := q.db.QueryRowContext(ctx, getGoogleTokenByUserID, userID)
+	var i GetGoogleTokenByUserIDRow
+	err := row.Scan(
+		&i.AccessTokenEncrypted,
+		&i.RefreshTokenEncrypted,
+		&i.Expiry,
+		&i.ProviderSubject,
+		&i.TokenType,
 	)
 	return i, err
 }

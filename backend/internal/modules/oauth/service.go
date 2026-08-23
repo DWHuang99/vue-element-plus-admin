@@ -36,6 +36,7 @@ type ExternalUserService struct {
 	userRepository *user.UserRepository
 	oidcAuth       *oidcCustom.OIDCAuth
 	redisClient    *redis.Client
+	encryptionKey  []byte
 }
 
 func NewExternalUserService(
@@ -44,6 +45,7 @@ func NewExternalUserService(
 	userRepository *user.UserRepository,
 	oidcAuth *oidcCustom.OIDCAuth,
 	redisClient *redis.Client,
+	encryptionKey []byte,
 ) *ExternalUserService {
 	return &ExternalUserService{
 		database:       database,
@@ -51,6 +53,7 @@ func NewExternalUserService(
 		userRepository: userRepository,
 		oidcAuth:       oidcAuth,
 		redisClient:    redisClient,
+		encryptionKey:  append([]byte(nil), encryptionKey...),
 	}
 }
 
@@ -222,4 +225,43 @@ func externalAccountPasswordHash() (string, error) {
 		return "", fmt.Errorf("hash external account password: %w", err)
 	}
 	return passwordHash, nil
+}
+
+func (s *ExternalUserService) AddToken(
+	ctx context.Context,
+	oauthtoken *oauth2.Token,
+	userid int64,
+	idToken *oidc.IDToken) error {
+	refreshTokenEncrypted, err := encryptOptionalToken(s.encryptionKey, oauthtoken.RefreshToken)
+	if err != nil {
+		return err
+	}
+	accessTokenEncrypted, err := security.Encrypt(s.encryptionKey, []byte(oauthtoken.AccessToken))
+	if err != nil {
+		return err
+	}
+	err = s.repository.AddToken(ctx, db.AddGoogleTokenParams{
+		UserID:                userid,
+		ProviderSubject:       idToken.Subject,
+		AccessTokenEncrypted:  string(accessTokenEncrypted),
+		RefreshTokenEncrypted: refreshTokenEncrypted,
+		TokenType:             oauthtoken.TokenType,
+		Expiry:                oauthtoken.Expiry,
+		Scopes:                s.oidcAuth.OauthConfig.Scopes,
+	})
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func encryptOptionalToken(encryptionKey []byte, token string) (string, error) {
+	if token == "" {
+		return "", nil
+	}
+	encrypted, err := security.Encrypt(encryptionKey, []byte(token))
+	if err != nil {
+		return "", err
+	}
+	return string(encrypted), nil
 }

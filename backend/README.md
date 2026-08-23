@@ -82,9 +82,10 @@ OIDC_CLIENT_ID=<provider-client-id>
 OIDC_CLIENT_SECRET=<provider-client-secret>
 OIDC_REDIRECT_URL=http://localhost:8080/api/v1/oauth/callback
 OIDC_FRONTEND_REDIRECT_URL=http://localhost:4000/#/login
+KEY_ENCRYPTION_KEY=<16-24-or-32-byte-secret>
 ```
 
-OIDC 默认关闭；`OIDC_ENABLED=false` 时 IAM 不初始化服务商，也不注册 `/api/v1/oauth/*` 路由，因此未配置 OIDC 的部署仍可正常启动。开启后，其余五项配置均为必填。
+OIDC 默认关闭；`OIDC_ENABLED=false` 时 IAM 不初始化服务商，也不注册 `/api/v1/oauth/*` 和 `/api/v1/gmail/*` 路由，因此未配置 OIDC 的部署仍可正常启动。开启后，其余六项配置均为必填。`KEY_ENCRYPTION_KEY` 支持原始字符串、hex 或 Base64 表示，解码后必须是 16、24 或 32 字节，用于在数据库中加密 Google access/refresh token；生产环境应使用随机生成且稳定保存的密钥，密钥丢失后已有 token 将无法解密。
 
 `OIDC_REDIRECT_URL` 必须与服务商控制台登记的回调地址完全一致。登录成功后，IAM 设置 HttpOnly refresh cookie 并跳转到 `OIDC_FRONTEND_REDIRECT_URL`；前端再调用 `/api/v1/auth/refresh` 建立本系统会话，不会把 access token 放进 URL。
 

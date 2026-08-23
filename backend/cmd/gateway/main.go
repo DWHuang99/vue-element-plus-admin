@@ -106,7 +106,7 @@ func loadGatewayConfig() (*gatewayConfig, error) {
 	if err != nil {
 		return nil, err
 	}
-	responseHeaderTimeout, err := duration("GATEWAY_RESPONSE_HEADER_TIMEOUT_MS", 3000)
+	responseHeaderTimeout, err := duration("GATEWAY_RESPONSE_HEADER_TIMEOUT_MS", 20000)
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +118,7 @@ func loadGatewayConfig() (*gatewayConfig, error) {
 	if err != nil {
 		return nil, err
 	}
-	writeTimeout, err := duration("GATEWAY_WRITE_TIMEOUT_MS", 10000)
+	writeTimeout, err := duration("GATEWAY_WRITE_TIMEOUT_MS", 25000)
 	if err != nil {
 		return nil, err
 	}

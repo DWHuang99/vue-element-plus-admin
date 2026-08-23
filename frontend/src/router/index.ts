@@ -110,6 +110,26 @@ export const asyncRouterMap: AppRouteRecordRaw[] = [
     ]
   },
   {
+    path: '/mail',
+    component: Layout,
+    redirect: '/mail/unread',
+    name: 'Mail',
+    meta: {
+      title: 'router.mail'
+    },
+    children: [
+      {
+        path: 'unread',
+        component: () => import('@/views/Gmail/Unread.vue'),
+        name: 'UnreadMail',
+        meta: {
+          title: 'router.mail',
+          icon: 'vi-ant-design:mail-filled'
+        }
+      }
+    ]
+  },
+  {
     path: '/external-link',
     component: Layout,
     meta: {},

@@ -6,6 +6,7 @@ import (
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
+	"google.golang.org/api/gmail/v1"
 )
 
 type LoginFlow struct {
@@ -42,6 +43,7 @@ func NewOIDCAuth(
 			oidc.ScopeOpenID,
 			oidc.ScopeProfile,
 			oidc.ScopeEmail,
+			gmail.GmailReadonlyScope,
 		},
 	}
 

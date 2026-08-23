@@ -12,14 +12,25 @@ command -v docker >/dev/null 2>&1 || {
   exit 1
 }
 
-if command -v node >/dev/null 2>&1 && command -v pnpm >/dev/null 2>&1; then
+is_wsl=false
+if [[ -r /proc/sys/kernel/osrelease ]] \
+  && grep -qi microsoft /proc/sys/kernel/osrelease; then
+  is_wsl=true
+fi
+
+# The repository is shared with Windows and its node_modules contains Windows
+# native packages. Prefer the Windows runtime in WSL even when nvm also exposes
+# a Linux Node.js, otherwise Rollup tries to load a Linux optional dependency.
+if [[ "$is_wsl" == true ]] \
+  && command -v node.exe >/dev/null 2>&1 \
+  && command -v pnpm.cmd >/dev/null 2>&1 \
+  && command -v cmd.exe >/dev/null 2>&1; then
+  use_windows_node=true
+elif command -v node >/dev/null 2>&1 && command -v pnpm >/dev/null 2>&1; then
   use_windows_node=false
 elif command -v node.exe >/dev/null 2>&1 \
   && command -v pnpm.cmd >/dev/null 2>&1 \
   && command -v cmd.exe >/dev/null 2>&1; then
-  # WSL can discover Windows npm shims, but the POSIX pnpm shim cannot find
-  # node.exe by the unqualified `node` name. Keep both the command and working
-  # directory on the Windows side so native optional dependencies match Node.
   use_windows_node=true
 else
   echo "Node.js and pnpm commands were not found. Please install them first."

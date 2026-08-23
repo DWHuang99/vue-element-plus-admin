@@ -38,3 +38,19 @@ func (r *GoogleUserRepository) CreateExternalUser(
 	_, err := r.queries.CreateExternalUser(ctx, arg)
 	return err
 }
+
+func (r *GoogleUserRepository) AddToken(ctx context.Context, arg db.AddGoogleTokenParams) error {
+	_, err := r.queries.AddGoogleToken(ctx, arg)
+	return err
+}
+
+func (r *GoogleUserRepository) GetToken(ctx context.Context, userid int64) (*db.GetGoogleTokenByUserIDRow, error) {
+	tokenRow, err := r.queries.GetGoogleTokenByUserID(ctx, userid)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, sql.ErrNoRows
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &tokenRow, nil
+}

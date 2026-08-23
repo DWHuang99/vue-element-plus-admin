@@ -231,3 +231,41 @@ VALUES (
     sqlc.arg('email')::TEXT
 )
 RETURNING id, user_id, provider_issuer, provider_subject, email;
+
+-- name: AddGoogleToken :one
+INSERT INTO google_integrations (
+    user_id,
+    provider_subject,
+    access_token_encrypted,
+    refresh_token_encrypted,
+    token_type,
+    expiry,
+    scopes
+)
+VALUES (
+    sqlc.arg('user_id')::BIGINT,
+    sqlc.arg('provider_subject')::TEXT,
+    sqlc.arg('access_token_encrypted')::TEXT,
+    sqlc.arg('refresh_token_encrypted')::TEXT,
+    sqlc.arg('token_type')::TEXT,
+    sqlc.arg('expiry')::TIMESTAMPTZ,
+    sqlc.arg('scopes')::TEXT[]
+)
+ON CONFLICT (user_id) DO UPDATE SET
+    access_token_encrypted = EXCLUDED.access_token_encrypted,
+    refresh_token_encrypted = CASE
+        WHEN EXCLUDED.refresh_token_encrypted <> ''
+        THEN EXCLUDED.refresh_token_encrypted
+        ELSE google_integrations.refresh_token_encrypted
+    END,
+    token_type = EXCLUDED.token_type,
+    expiry = EXCLUDED.expiry,
+    scopes = EXCLUDED.scopes,
+    updated_at = CURRENT_TIMESTAMP
+RETURNING id, user_id, provider_subject, access_token_encrypted, refresh_token_encrypted, token_type, expiry, scopes;
+
+-- name: GetGoogleTokenByUserID :one
+SELECT access_token_encrypted, refresh_token_encrypted, expiry,provider_subject,token_type
+FROM google_integrations
+WHERE user_id = sqlc.arg('user_id')::BIGINT
+and token_type = 'Bearer';

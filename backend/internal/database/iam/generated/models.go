@@ -21,6 +21,19 @@ type CasbinRule struct {
 	V5    string `json:"v5"`
 }
 
+type GoogleIntegration struct {
+	ID                    int64     `json:"id"`
+	UserID                int64     `json:"user_id"`
+	ProviderSubject       string    `json:"provider_subject"`
+	AccessTokenEncrypted  string    `json:"access_token_encrypted"`
+	RefreshTokenEncrypted string    `json:"refresh_token_encrypted"`
+	TokenType             string    `json:"token_type"`
+	Expiry                time.Time `json:"expiry"`
+	Scopes                []string  `json:"scopes"`
+	CreatedAt             time.Time `json:"created_at"`
+	UpdatedAt             time.Time `json:"updated_at"`
+}
+
 type Menu struct {
 	ID             int64           `json:"id"`
 	ParentID       sql.NullInt64   `json:"parent_id"`
